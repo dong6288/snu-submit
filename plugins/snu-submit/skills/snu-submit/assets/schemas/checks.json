@@ -263,10 +263,11 @@
     },
     "check": {
       "type": "object", "additionalProperties": false,
-      "required": ["check_id", "requirement_id", "axis", "mandatory", "kind", "evidence", "status", "method", "target", "observed", "reason", "unknown_codes", "remediation", "content_candidates"],
+      "required": ["check_id", "requirement_id", "requirement_sha256", "axis", "mandatory", "kind", "evidence", "status", "method", "target", "observed", "reason", "unknown_codes", "remediation", "content_candidates"],
       "properties": {
         "check_id": {"$ref": "#/$defs/id"},
         "requirement_id": {"$ref": "#/$defs/id"},
+        "requirement_sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of the full original requirement record in canonical JSON (sort_keys, compact separators, ensure_ascii=False, UTF-8), computed by the core."},
         "axis": {"enum": ["instructor_requirement", "system_constraint"]},
         "mandatory": {"type": "boolean"},
         "kind": {"$ref": "#/$defs/kind"},
