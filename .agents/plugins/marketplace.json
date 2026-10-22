@@ -1,0 +1,17 @@
+{
+  "name": "snu-submit",
+  "plugins": [
+    {
+      "name": "snu-submit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/snu-submit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
