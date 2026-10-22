@@ -1,0 +1,30 @@
+# SNU Submit skill — project metadata (0.1.0-alpha.1, offline-preview).
+# The skill is not installed as a package. Runtime dependencies are installed
+# only from the hash-pinned requirements.lock into a venv outside the plugin
+# cache. Keep the pins below identical to requirements.lock.
+
+[project]
+name = "snu-submit"
+version = "0.1.0-alpha.1"
+description = "Offline-preview checker that compares explicitly selected local submission files with evidence-backed assignment requirements."
+readme = { text = "See README.md at the repository root and SKILL.md in this directory.", content-type = "text/plain" }
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "SNU Submit contributors" }]
+dependencies = [
+    "pypdf==6.21.2",
+    "jsonschema==4.26.0",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+
+[tool.snu-submit]
+classification = "offline-preview"
+lock = "requirements.lock"
+schemas = ["assets/schemas/source.json", "assets/schemas/requirements.json", "assets/schemas/checks.json"]

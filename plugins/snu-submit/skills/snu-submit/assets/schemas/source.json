@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:snu-submit:schema:source:1.0",
+  "title": "SNU Submit source bundle",
+  "description": "Collected source evidence for ONE selected assignment. Structural contract only. The core MUST additionally: reject NaN/Infinity at JSON decoding; enforce unique source ids; verify every artifact/normalized reference stays inside the run directory without links; recompute every SHA-256 from actual bytes (model-written digests are never trusted); verify span start<end; refuse coverage 'complete' when any cap/remainder/failure/unknown is present; treat email sources as discovery/history that cannot alone establish current requirements or freshness; evaluate freshness age (<=10 minutes, same run). Schema validity is not evidence of truthful collection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode", "assignment", "sources", "coverage", "freshness", "submission_window", "server_receipt"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "mode": {"enum": ["offline", "synthetic", "online"], "description": "offline: local preparatory mode, freshness unknown. synthetic: 가상 과제 재현, never live readiness. online: host collected in this run."},
+    "assignment": {"$ref": "#/$defs/assignment"},
+    "sources": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/source"}, "description": "May be empty; an empty list is incomplete input and never implies readiness."},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "freshness": {"$ref": "#/$defs/freshness"},
+    "submission_window": {"$ref": "#/$defs/submission_window"},
+    "server_receipt": {"$ref": "#/$defs/server_receipt"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "id_or_null": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "sha256_or_null": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "Lowercase hex SHA-256 computed locally by the core, or null when not collected."},
+    "timestamp": {"type": "string", "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$", "description": "RFC 3339 timestamp with explicit offset."},
+    "timestamp_or_null": {"type": ["string", "null"], "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"},
+    "url_or_null": {"type": ["string", "null"], "maxLength": 2048, "pattern": "^https?://[^\\s<>\"]+$", "description": "Observed http(s) URL as data only; never fetched by the core."},
+    "rel_path_or_null": {"type": ["string", "null"], "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:*?\"<>|\\u0000-\\u001f]+$", "description": "Forward-slash path relative to the run directory. Core still enforces containment and no links."},
+    "text_or_null": {"type": ["string", "null"], "maxLength": 2048},
+    "count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["course_id", "assignment_id", "section_id", "audience"],
+      "description": "Invented or user-chosen identifiers of the one selected assignment.",
+      "properties": {
+        "course_id": {"$ref": "#/$defs/id"},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "section_id": {"$ref": "#/$defs/id_or_null", "description": "null = unknown section."},
+        "audience": {"$ref": "#/$defs/id_or_null", "description": "e.g. all, section-02, individual, group; null = unknown."},
+        "title": {"type": ["string", "null"], "maxLength": 512},
+        "url": {"$ref": "#/$defs/url_or_null"}
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Where text sits. Browser text may have only char_start/char_end; never invent page numbers. char_start/char_end are zero-based Unicode code point offsets into the exact normalized text, start inclusive, end exclusive.",
+      "properties": {
+        "page": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "paragraph": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000000},
+        "table": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "row": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "column": {"type": ["integer", "null"], "minimum": 1, "maximum": 10000},
+        "char_start": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "char_end": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "label": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "unread_region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "may_contain_requirements", "location", "detail"],
+      "properties": {
+        "kind": {"enum": ["image", "scanned_page", "embedded_object", "attachment_not_fetched", "linked_document_not_fetched", "encrypted", "truncated", "budget_limit", "unsupported_format", "parse_error", "other"]},
+        "may_contain_requirements": {"type": "boolean", "description": "true (or unsure) prevents complete coverage until resolved."},
+        "location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]},
+        "detail": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "course_id", "assignment_id", "section_id", "audience", "applicability", "applicability_reason", "parent_source_id", "original_url", "final_url", "observed_at", "issued_at", "modified_at", "artifact_ref", "artifact_sha256", "normalized_text_ref", "normalized_text_sha256", "original_bytes_sha256", "hash_algorithm", "normalization_version", "collection_status", "reason", "locations", "unread_regions"],
+      "description": "One collected source. artifact_ref is the preserved raw host-tool output or downloaded bytes; normalized_text_ref is the core-produced normalized text. Hashes are recomputed locally on extract/check/recheck.",
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["assignment", "submission_form", "notice", "common_notice", "syllabus", "attachment", "email", "email_attachment", "user_document", "synthetic", "user_confirmation"]},
+        "course_id": {"$ref": "#/$defs/id_or_null"},
+        "assignment_id": {"$ref": "#/$defs/id_or_null", "description": "null for course-wide notices."},
+        "section_id": {"$ref": "#/$defs/id_or_null"},
+        "audience": {"$ref": "#/$defs/id_or_null"},
+        "applicability": {"enum": ["applies", "not_applicable", "unknown"]},
+        "applicability_reason": {"$ref": "#/$defs/text_or_null"},
+        "parent_source_id": {"$ref": "#/$defs/id_or_null", "description": "Source that referenced this one (attachment, linked document, mail attachment)."},
+        "original_url": {"$ref": "#/$defs/url_or_null"},
+        "final_url": {"$ref": "#/$defs/url_or_null"},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "issued_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "modified_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "artifact_ref": {"$ref": "#/$defs/rel_path_or_null"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "normalized_text_ref": {"$ref": "#/$defs/rel_path_or_null"},
+        "normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "original_bytes_sha256": {"$ref": "#/$defs/sha256_or_null", "description": "Hash of downloaded original document bytes when applicable."},
+        "hash_algorithm": {"const": "sha256"},
+        "normalization_version": {"$ref": "#/$defs/id_or_null"},
+        "collection_status": {"enum": ["complete", "incomplete", "failed"]},
+        "reason": {"$ref": "#/$defs/text_or_null"},
+        "locations": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/location"}},
+        "unread_regions": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/unread_region"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"collection_status": {"const": "complete"}}},
+          "then": {"properties": {
+            "artifact_ref": {"type": "string"}, "artifact_sha256": {"type": "string"},
+            "normalized_text_ref": {"type": "string"}, "normalized_text_sha256": {"type": "string"},
+            "normalization_version": {"type": "string"},
+            "unread_regions": {"not": {"contains": {"properties": {"may_contain_requirements": {"const": true}}}}}
+          }},
+          "else": {"properties": {"reason": {"type": "string", "minLength": 1}}}
+        }
+      ]
+    },
+    "section_status": {"enum": ["complete", "incomplete", "failed", "not_present", "unknown"]},
+    "coverage_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "source_id", "detail"],
+      "properties": {
+        "code": {"enum": ["auth_expired", "access_denied", "loading_incomplete", "has_more", "cap_reached", "body_truncated", "tool_output_truncated", "fetch_failed", "semester_start_unknown", "common_notice_missing", "pinned_notice_missing", "unresolved_date", "unread_region", "not_collected", "other"]},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "detail": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "semester_start", "semester_start_source_id", "through_at", "notice_pages_read", "notice_records_read", "notice_cap_reached", "notice_has_more", "body_truncated", "pinned_notices", "common_notices", "referenced_materials", "mail", "unread_required_sources", "failures"],
+      "description": "Collection caps (5 notice pages / 100 notices; same for mail) bound work; reaching them is not completeness. Core re-derives state and refuses 'complete' with any unresolved item.",
+      "properties": {
+        "state": {"enum": ["complete", "incomplete"]},
+        "semester_start": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "semester_start_source_id": {"$ref": "#/$defs/id_or_null"},
+        "through_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "notice_pages_read": {"type": "integer", "minimum": 0, "maximum": 5},
+        "notice_records_read": {"type": "integer", "minimum": 0, "maximum": 100},
+        "notice_cap_reached": {"type": "boolean"},
+        "notice_has_more": {"type": ["boolean", "null"], "description": "null = unknown whether more notices exist."},
+        "body_truncated": {"type": "boolean"},
+        "pinned_notices": {"$ref": "#/$defs/section_status"},
+        "common_notices": {"$ref": "#/$defs/section_status"},
+        "referenced_materials": {"$ref": "#/$defs/section_status"},
+        "mail": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "pages_read", "records_read", "has_more", "cap_reached"],
+          "description": "Optional discovery channel. Never establishes current requirements alone.",
+          "properties": {
+            "status": {"enum": ["not_used", "complete", "incomplete", "failed"]},
+            "pages_read": {"type": "integer", "minimum": 0, "maximum": 5},
+            "records_read": {"type": "integer", "minimum": 0, "maximum": 100},
+            "has_more": {"type": ["boolean", "null"]},
+            "cap_reached": {"type": "boolean"}
+          }
+        },
+        "unread_required_sources": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/id"}},
+        "failures": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/coverage_failure"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "complete"}}},
+          "then": {"properties": {
+            "semester_start": {"type": "string"},
+            "through_at": {"type": "string"},
+            "notice_cap_reached": {"const": false},
+            "notice_has_more": {"const": false},
+            "body_truncated": {"const": false},
+            "pinned_notices": {"enum": ["complete", "not_present"]},
+            "common_notices": {"enum": ["complete", "not_present"]},
+            "referenced_materials": {"enum": ["complete", "not_present"]},
+            "mail": {"properties": {"status": {"enum": ["not_used", "complete"]}, "cap_reached": {"const": false}, "has_more": {"enum": [false, null]}}},
+            "unread_required_sources": {"maxItems": 0},
+            "failures": {"maxItems": 0}
+          }}
+        }
+      ]
+    },
+    "freshness_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "previous_artifact_sha256", "current_artifact_sha256", "previous_normalized_text_sha256", "current_normalized_text_sha256", "observed_at", "status"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "previous_artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "current_artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "previous_normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "current_normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "observed_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "status": {"enum": ["unchanged", "changed", "failed", "not_refreshed"]}
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "refreshed_at", "items", "reason"],
+      "description": "Final host re-read receipt in the same run. Compares hashes even at the same URL. not_performed (offline) and failed mean freshness unknown. Core checks age <= 10 minutes and recomputes hashes.",
+      "properties": {
+        "state": {"enum": ["fresh", "changed", "failed", "not_performed"]},
+        "refreshed_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "items": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/freshness_item"}},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "fresh"}}},
+         "then": {"properties": {"refreshed_at": {"type": "string"}, "items": {"minItems": 1, "items": {"properties": {"status": {"const": "unchanged"}}}}}}},
+        {"if": {"properties": {"state": {"enum": ["failed", "not_performed"]}}},
+         "then": {"properties": {"reason": {"type": "string", "minLength": 1}}}}
+      ]
+    },
+    "submission_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "deadline_at", "deadline_text", "timezone", "source_id", "reason"],
+      "description": "Deadline/window axis, separate from file readiness and server receipt. deadline_text keeps the original wording; deadline_at only with absolute year and timezone evidence.",
+      "properties": {
+        "state": {"enum": ["open", "closed", "locked", "unknown"]},
+        "deadline_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "deadline_text": {"type": ["string", "null"], "maxLength": 1024},
+        "timezone": {"type": ["string", "null"], "maxLength": 64, "pattern": "^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$"},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "server_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observed_at", "source_id", "observed_filenames", "reason"],
+      "description": "Server submission state as observed on screen. observed_filenames are data only and never imply byte equality with local files.",
+      "properties": {
+        "status": {"enum": ["submitted", "not_submitted", "unknown"]},
+        "observed_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "observed_filenames": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 255}},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"enum": ["submitted", "not_submitted"]}}},
+         "then": {"properties": {"observed_at": {"type": "string"}, "source_id": {"type": "string"}}}}
+      ]
+    }
+  }
+}

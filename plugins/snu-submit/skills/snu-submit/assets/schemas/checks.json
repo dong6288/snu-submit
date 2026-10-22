@@ -1,0 +1,468 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:snu-submit:schema:checks:1.0",
+  "title": "SNU Submit report snapshot",
+  "description": "JSON source of truth for one timestamped check/recheck run. A snapshot, never perpetual validity, live eTL readiness or proof of submission. Structural contract only; the core MUST additionally enforce fail priority, unknown reasons, nonempty complete mandatory evaluation before ready, recomputed hashes, unique ids and finite numbers (reject NaN/Infinity at decoding).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report_schema_version", "tool_version", "rules_version", "run_id", "generated_at", "inspection_started_at", "inspection_finished_at", "mode", "synthetic_label", "snapshot_notice", "assignment", "sources", "selection", "files", "checks", "coverage", "freshness", "verdict", "unknown_reasons", "submission_window", "server_receipt", "delta"],
+  "properties": {
+    "report_schema_version": {"const": "1.0"},
+    "tool_version": {"const": "0.1.0-alpha.1"},
+    "rules_version": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "generated_at": {"$ref": "#/$defs/timestamp"},
+    "inspection_started_at": {"$ref": "#/$defs/timestamp"},
+    "inspection_finished_at": {"$ref": "#/$defs/timestamp"},
+    "mode": {"enum": ["offline", "synthetic", "online"]},
+    "synthetic_label": {"type": ["string", "null"], "description": "Must be '가상 과제 재현' in synthetic mode, null otherwise."},
+    "snapshot_notice": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "assignment": {"$ref": "#/$defs/assignment"},
+    "sources": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/source_summary"}},
+    "selection": {"$ref": "#/$defs/selection"},
+    "files": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/file_record"}},
+    "checks": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/check"}},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "freshness": {"$ref": "#/$defs/freshness"},
+    "verdict": {"$ref": "#/$defs/verdict"},
+    "unknown_reasons": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/unknown_reason"}},
+    "submission_window": {"$ref": "#/$defs/submission_window"},
+    "server_receipt": {"$ref": "#/$defs/server_receipt"},
+    "delta": {"$ref": "#/$defs/delta"}
+  },
+  "allOf": [
+    {"if": {"properties": {"mode": {"const": "synthetic"}}},
+     "then": {"properties": {"synthetic_label": {"const": "가상 과제 재현"}}},
+     "else": {"properties": {"synthetic_label": {"type": "null"}}}},
+    {"if": {"properties": {"verdict": {"properties": {"overall": {"const": "ready"}}}}},
+     "then": {"properties": {
+       "mode": {"enum": ["synthetic", "online"]},
+       "coverage": {"properties": {"state": {"const": "complete"}}},
+       "freshness": {"properties": {"state": {"const": "fresh"}}},
+       "selection": {"properties": {"resolved": {"const": true}}}
+     }}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "id_or_null": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "id_list": {"type": "array", "maxItems": 1000, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha256_or_null": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"},
+    "timestamp_or_null": {"type": ["string", "null"], "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"},
+    "url_or_null": {"type": ["string", "null"], "maxLength": 2048, "pattern": "^https?://[^\\s<>\"]+$"},
+    "rel_path": {"type": "string", "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:*?\"<>|\\u0000-\\u001f]+$"},
+    "rel_path_or_null": {"type": ["string", "null"], "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:*?\"<>|\\u0000-\\u001f]+$"},
+    "raw_name": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Untrusted name as read (e.g. unsafe archive entry name); data only, must be escaped when rendered."},
+    "text_or_null": {"type": ["string", "null"], "maxLength": 2048},
+    "count": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
+    "count_or_null": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000},
+    "scalar": {"anyOf": [{"type": "number"}, {"type": "string", "maxLength": 1024}, {"type": "boolean"}, {"type": "null"}], "description": "Bounded scalar observation; never an object or code."},
+    "role": {"enum": ["report", "appendix", "code", "archive", "reference", "other"]},
+    "kind": {"enum": ["exists", "count", "filename", "extension", "format", "size_bytes", "pages", "text_chars", "text_words", "content", "deadline"]},
+    "operator": {"enum": ["eq", "lt", "lte", "gt", "gte", "exists", "contains"]},
+    "unit": {"enum": ["bytes", "KiB", "MiB", "MB_unspecified", "pages", "files", "characters", "characters_no_whitespace", "whitespace_words", null]},
+    "detected_format": {"enum": ["pdf", "docx", "zip", "text", "hwp", "hwpx", "png", "jpeg", "empty", "unknown", "missing"]},
+    "unknown_code": {"enum": ["source_missing", "source_hash_mismatch", "quote_span_mismatch", "collection_incomplete", "freshness_unknown", "source_changed", "conflict_unresolved", "applicability_unknown", "date_unresolved", "selection_unresolved", "target_ambiguous", "parser_failed", "parser_timeout", "budget_exceeded", "encrypted", "unsupported_format", "unread_region", "file_changed", "outside_root_or_link", "unsafe_archive_entry", "nested_archive", "unsupported_check", "ambiguous_unit", "requires_user_confirmation", "empty_requirements", "no_mandatory_requirements", "window_unknown", "other"]},
+    "span": {
+      "type": "object", "additionalProperties": false, "required": ["start", "end"],
+      "description": "Zero-based Unicode code point offsets into the exact normalized source text; start inclusive, end exclusive.",
+      "properties": {"start": {"type": "integer", "minimum": 0, "maximum": 2147483647}, "end": {"type": "integer", "minimum": 1, "maximum": 2147483647}}
+    },
+    "location": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "page": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "paragraph": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000000},
+        "table": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "row": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "column": {"type": ["integer", "null"], "minimum": 1, "maximum": 10000},
+        "char_start": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "char_end": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "label": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "assignment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["course_id", "assignment_id", "section_id", "audience"],
+      "properties": {
+        "course_id": {"$ref": "#/$defs/id"},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "section_id": {"$ref": "#/$defs/id_or_null"},
+        "audience": {"$ref": "#/$defs/id_or_null"},
+        "title": {"type": ["string", "null"], "maxLength": 512},
+        "url": {"$ref": "#/$defs/url_or_null"}
+      }
+    },
+    "source_summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "kind", "collection_status", "observed_at", "artifact_ref", "artifact_sha256", "normalized_text_sha256", "original_bytes_sha256", "hash_verification"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["assignment", "submission_form", "notice", "common_notice", "syllabus", "attachment", "email", "email_attachment", "user_document", "synthetic", "user_confirmation"]},
+        "collection_status": {"enum": ["complete", "incomplete", "failed"]},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "artifact_ref": {"$ref": "#/$defs/rel_path_or_null"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "original_bytes_sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "hash_verification": {"enum": ["verified", "mismatch", "missing_artifact", "not_collected"], "description": "Result of the core recomputing hashes from local bytes in this run."}
+      }
+    },
+    "selection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["resolved", "manifest_sha256", "files", "unresolved_reason"],
+      "properties": {
+        "resolved": {"type": "boolean"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256_or_null", "description": "Canonical manifest hash computed by the core; null only if selection could not be bound."},
+        "files": {
+          "type": "array", "maxItems": 1000,
+          "items": {"type": "object", "additionalProperties": false, "required": ["file_id", "path", "role", "sha256"],
+            "properties": {"file_id": {"$ref": "#/$defs/id"}, "path": {"$ref": "#/$defs/rel_path"}, "role": {"$ref": "#/$defs/role"}, "sha256": {"$ref": "#/$defs/sha256_or_null", "description": "null when the selected file is missing or unreadable; never fabricated."}}}
+        },
+        "unresolved_reason": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "stat": {
+      "type": "object", "additionalProperties": false, "required": ["size", "mtime_ns", "sha256"],
+      "properties": {"size": {"$ref": "#/$defs/count"}, "mtime_ns": {"type": "integer", "minimum": 0}, "sha256": {"$ref": "#/$defs/sha256_or_null"}}
+    },
+    "archive_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "entry_path", "is_dir", "compressed_size", "declared_size", "bytes_read", "crc_ok", "encrypted", "nested_archive", "unsafe_name", "sha256"],
+      "properties": {
+        "name": {"$ref": "#/$defs/raw_name"},
+        "entry_path": {"$ref": "#/$defs/rel_path_or_null", "description": "Validated internal path; null when the raw name is unsafe or ambiguous."},
+        "is_dir": {"type": "boolean"},
+        "compressed_size": {"$ref": "#/$defs/count"},
+        "declared_size": {"$ref": "#/$defs/count"},
+        "bytes_read": {"$ref": "#/$defs/count"},
+        "crc_ok": {"type": ["boolean", "null"], "description": "null = not fully read."},
+        "encrypted": {"type": "boolean"},
+        "nested_archive": {"type": "boolean"},
+        "unsafe_name": {"type": "boolean"},
+        "sha256": {"$ref": "#/$defs/sha256_or_null", "description": "Only when all entry bytes were actually streamed and CRC matched."}
+      }
+    },
+    "parser": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "status", "metrics", "unread_regions", "limits_hit", "errors"],
+      "properties": {
+        "name": {"enum": ["pdf", "docx", "zip", "text", "none"]},
+        "status": {"enum": ["ok", "partial", "failed", "timeout", "budget_exceeded", "unsupported", "encrypted", "not_run"]},
+        "metrics": {
+          "type": "object", "additionalProperties": false,
+          "required": ["pages", "text_chars", "text_chars_no_whitespace", "text_words", "paragraphs", "tables", "images", "entries", "uncompressed_bytes_read", "encoding"],
+          "properties": {
+            "pages": {"$ref": "#/$defs/count_or_null"},
+            "text_chars": {"$ref": "#/$defs/count_or_null"},
+            "text_chars_no_whitespace": {"$ref": "#/$defs/count_or_null"},
+            "text_words": {"$ref": "#/$defs/count_or_null"},
+            "paragraphs": {"$ref": "#/$defs/count_or_null"},
+            "tables": {"$ref": "#/$defs/count_or_null"},
+            "images": {"$ref": "#/$defs/count_or_null"},
+            "entries": {"$ref": "#/$defs/count_or_null"},
+            "uncompressed_bytes_read": {"$ref": "#/$defs/count_or_null"},
+            "encoding": {"type": ["string", "null"], "maxLength": 32, "pattern": "^[A-Za-z0-9_-]+$"}
+          }
+        },
+        "unread_regions": {
+          "type": "array", "maxItems": 1000,
+          "items": {"type": "object", "additionalProperties": false, "required": ["kind", "location", "detail"],
+            "properties": {
+              "kind": {"enum": ["image", "scanned_page", "embedded_object", "encrypted", "truncated", "budget_limit", "unsupported_format", "parse_error", "other"]},
+              "location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]},
+              "detail": {"$ref": "#/$defs/text_or_null"}}}
+        },
+        "limits_hit": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"enum": ["file_bytes", "total_bytes", "zip_entries", "zip_uncompressed_bytes", "pages", "time", "worker_output"]}, "description": "Product budgets, never assignment limits."},
+        "errors": {
+          "type": "array", "maxItems": 64,
+          "items": {"type": "object", "additionalProperties": false, "required": ["code", "detail"],
+            "properties": {"code": {"$ref": "#/$defs/unknown_code"}, "detail": {"$ref": "#/$defs/text_or_null"}}}
+        }
+      }
+    },
+    "file_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file_id", "path", "role", "exists", "sha256", "bytes", "detected_format", "declared_extension", "inspection_started_at", "inspection_finished_at", "before", "after", "changed_during_inspection", "parser", "archive_entries"],
+      "properties": {
+        "file_id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/rel_path"},
+        "role": {"$ref": "#/$defs/role"},
+        "exists": {"type": "boolean"},
+        "sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "bytes": {"$ref": "#/$defs/count_or_null"},
+        "detected_format": {"$ref": "#/$defs/detected_format"},
+        "declared_extension": {"type": ["string", "null"], "maxLength": 32},
+        "inspection_started_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "inspection_finished_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "before": {"anyOf": [{"$ref": "#/$defs/stat"}, {"type": "null"}]},
+        "after": {"anyOf": [{"$ref": "#/$defs/stat"}, {"type": "null"}]},
+        "changed_during_inspection": {"type": "boolean"},
+        "parser": {"$ref": "#/$defs/parser"},
+        "archive_entries": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/archive_entry"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"exists": {"const": false}}},
+         "then": {"properties": {"sha256": {"type": "null"}, "bytes": {"type": "null"}, "detected_format": {"const": "missing"}, "before": {"type": "null"}, "after": {"type": "null"}}}}
+      ]
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "quote", "span", "location", "verified"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "quote": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "span": {"$ref": "#/$defs/span"},
+        "location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]},
+        "verified": {"type": "boolean", "description": "true only when the core matched quote/span against locally hashed normalized text in this run."}
+      }
+    },
+    "resolved_file": {
+      "type": "object", "additionalProperties": false, "required": ["file_id", "path", "sha256", "entry_path", "entry_sha256"],
+      "properties": {
+        "file_id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/rel_path"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "entry_path": {"$ref": "#/$defs/rel_path_or_null", "description": "Archive-internal path, separate from the outer path."},
+        "entry_sha256": {"$ref": "#/$defs/sha256_or_null"}
+      }
+    },
+    "target": {
+      "description": "Discriminated by type. missing_target carries only expectations (and an existing container archive, if any) and never a fabricated file id/hash.",
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type", "scope", "files"],
+         "properties": {"type": {"const": "resolved_files"}, "scope": {"enum": ["file", "archive_entry"]}, "files": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"$ref": "#/$defs/resolved_file"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "manifest_sha256", "file_ids", "count"],
+         "properties": {"type": {"const": "submission_set"}, "manifest_sha256": {"$ref": "#/$defs/sha256"}, "file_ids": {"$ref": "#/$defs/id_list"}, "count": {"type": "integer", "minimum": 0, "maximum": 1000}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "scope", "expected_role", "expected_name", "expected_path", "container"],
+         "properties": {
+           "type": {"const": "missing_target"},
+           "scope": {"enum": ["file", "archive_entry"]},
+           "expected_role": {"anyOf": [{"$ref": "#/$defs/role"}, {"type": "null"}]},
+           "expected_name": {"type": ["string", "null"], "maxLength": 255},
+           "expected_path": {"$ref": "#/$defs/rel_path_or_null"},
+           "container": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["file_id", "sha256"], "properties": {"file_id": {"$ref": "#/$defs/id"}, "sha256": {"$ref": "#/$defs/sha256"}}}]}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "reason_code", "reason"],
+         "properties": {"type": {"const": "unresolved"}, "reason_code": {"$ref": "#/$defs/unknown_code"}, "reason": {"type": "string", "minLength": 1, "maxLength": 2048}}}
+      ]
+    },
+    "observed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operator", "expected", "unit", "values"],
+      "properties": {
+        "operator": {"$ref": "#/$defs/operator"},
+        "expected": {"$ref": "#/$defs/scalar"},
+        "unit": {"$ref": "#/$defs/unit"},
+        "values": {
+          "type": "array", "maxItems": 1000,
+          "items": {"type": "object", "additionalProperties": false, "required": ["file_id", "entry_path", "value", "status"],
+            "properties": {"file_id": {"$ref": "#/$defs/id_or_null"}, "entry_path": {"$ref": "#/$defs/rel_path_or_null"}, "value": {"$ref": "#/$defs/scalar"}, "status": {"enum": ["pass", "fail", "unknown", "not_applicable"]}}}
+        }
+      }
+    },
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["check_id", "requirement_id", "axis", "mandatory", "kind", "evidence", "status", "method", "target", "observed", "reason", "unknown_codes", "remediation", "content_candidates"],
+      "properties": {
+        "check_id": {"$ref": "#/$defs/id"},
+        "requirement_id": {"$ref": "#/$defs/id"},
+        "axis": {"enum": ["instructor_requirement", "system_constraint"]},
+        "mandatory": {"type": "boolean"},
+        "kind": {"$ref": "#/$defs/kind"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "status": {"enum": ["pass", "fail", "unknown", "not_applicable"]},
+        "method": {"enum": ["deterministic", "content_review", "user_confirmed"]},
+        "target": {"$ref": "#/$defs/target"},
+        "observed": {"anyOf": [{"$ref": "#/$defs/observed"}, {"type": "null"}]},
+        "reason": {"$ref": "#/$defs/text_or_null"},
+        "unknown_codes": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/unknown_code"}},
+        "remediation": {"$ref": "#/$defs/text_or_null"},
+        "content_candidates": {
+          "type": "array", "maxItems": 50, "description": "Evidence candidates for content review; never a pass by themselves.",
+          "items": {"type": "object", "additionalProperties": false, "required": ["file_id", "location", "excerpt"],
+            "properties": {"file_id": {"$ref": "#/$defs/id"}, "location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]}, "excerpt": {"type": "string", "maxLength": 512}}}
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "fail"}}}, "then": {"properties": {"remediation": {"type": "string", "minLength": 1}, "evidence": {"properties": {"verified": {"const": true}}}}}},
+        {"if": {"properties": {"status": {"const": "pass"}}}, "then": {"properties": {"evidence": {"properties": {"verified": {"const": true}}}, "target": {"properties": {"type": {"enum": ["resolved_files", "submission_set"]}}}, "unknown_codes": {"maxItems": 0}}}},
+        {"if": {"properties": {"status": {"const": "unknown"}}}, "then": {"properties": {"unknown_codes": {"minItems": 1}}}},
+        {"if": {"properties": {"kind": {"const": "content"}, "status": {"const": "pass"}}}, "then": {"properties": {"method": {"const": "user_confirmed"}}}},
+        {"if": {"properties": {"method": {"const": "content_review"}}}, "then": {"properties": {"status": {"enum": ["unknown", "not_applicable"]}}}}
+      ]
+    },
+    "verdict": {
+      "type": "object", "additionalProperties": false,
+      "required": ["overall", "label", "summary", "mandatory_total", "mandatory_pass", "mandatory_fail", "mandatory_unknown", "mandatory_not_applicable", "freshness"],
+      "properties": {
+        "overall": {"enum": ["needs_changes", "needs_confirmation", "ready"]},
+        "label": {"enum": ["수정 필요", "확인 필요", "확인된 요구사항 기준 파일 준비됨"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "mandatory_total": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "mandatory_pass": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "mandatory_fail": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "mandatory_unknown": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "mandatory_not_applicable": {"type": "integer", "minimum": 0, "maximum": 4096},
+        "freshness": {"enum": ["fresh", "changed", "unknown"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"overall": {"const": "needs_changes"}}}, "then": {"properties": {"label": {"const": "수정 필요"}, "mandatory_fail": {"minimum": 1}}}},
+        {"if": {"properties": {"overall": {"const": "needs_confirmation"}}}, "then": {"properties": {"label": {"const": "확인 필요"}, "mandatory_fail": {"const": 0}}}},
+        {"if": {"properties": {"overall": {"const": "ready"}}}, "then": {"properties": {"label": {"const": "확인된 요구사항 기준 파일 준비됨"}, "mandatory_pass": {"minimum": 1}, "mandatory_fail": {"const": 0}, "mandatory_unknown": {"const": 0}, "freshness": {"const": "fresh"}}}}
+      ]
+    },
+    "unknown_reason": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "requirement_id", "source_id", "file_id", "detail"],
+      "properties": {
+        "code": {"$ref": "#/$defs/unknown_code"},
+        "requirement_id": {"$ref": "#/$defs/id_or_null"},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "file_id": {"$ref": "#/$defs/id_or_null"},
+        "detail": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "section_status": {"enum": ["complete", "incomplete", "failed", "not_present", "unknown"]},
+    "coverage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "semester_start", "semester_start_source_id", "through_at", "notice_pages_read", "notice_records_read", "notice_cap_reached", "notice_has_more", "body_truncated", "pinned_notices", "common_notices", "referenced_materials", "mail", "unread_required_sources", "failures"],
+      "description": "Core-derived coverage, same shape as source.json coverage.",
+      "properties": {
+        "state": {"enum": ["complete", "incomplete"]},
+        "semester_start": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "semester_start_source_id": {"$ref": "#/$defs/id_or_null"},
+        "through_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "notice_pages_read": {"type": "integer", "minimum": 0, "maximum": 5},
+        "notice_records_read": {"type": "integer", "minimum": 0, "maximum": 100},
+        "notice_cap_reached": {"type": "boolean"},
+        "notice_has_more": {"type": ["boolean", "null"]},
+        "body_truncated": {"type": "boolean"},
+        "pinned_notices": {"$ref": "#/$defs/section_status"},
+        "common_notices": {"$ref": "#/$defs/section_status"},
+        "referenced_materials": {"$ref": "#/$defs/section_status"},
+        "mail": {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "pages_read", "records_read", "has_more", "cap_reached"],
+          "properties": {
+            "status": {"enum": ["not_used", "complete", "incomplete", "failed"]},
+            "pages_read": {"type": "integer", "minimum": 0, "maximum": 5},
+            "records_read": {"type": "integer", "minimum": 0, "maximum": 100},
+            "has_more": {"type": ["boolean", "null"]},
+            "cap_reached": {"type": "boolean"}
+          }
+        },
+        "unread_required_sources": {"$ref": "#/$defs/id_list"},
+        "failures": {
+          "type": "array", "maxItems": 256,
+          "items": {"type": "object", "additionalProperties": false, "required": ["code", "source_id", "detail"],
+            "properties": {
+              "code": {"enum": ["auth_expired", "access_denied", "loading_incomplete", "has_more", "cap_reached", "body_truncated", "tool_output_truncated", "fetch_failed", "semester_start_unknown", "common_notice_missing", "pinned_notice_missing", "unresolved_date", "unread_region", "not_collected", "other"]},
+              "source_id": {"$ref": "#/$defs/id_or_null"},
+              "detail": {"$ref": "#/$defs/text_or_null"}}}
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "complete"}}},
+         "then": {"properties": {
+           "semester_start": {"type": "string"}, "through_at": {"type": "string"},
+           "notice_cap_reached": {"const": false}, "notice_has_more": {"const": false}, "body_truncated": {"const": false},
+           "pinned_notices": {"enum": ["complete", "not_present"]}, "common_notices": {"enum": ["complete", "not_present"]}, "referenced_materials": {"enum": ["complete", "not_present"]},
+           "mail": {"properties": {"status": {"enum": ["not_used", "complete"]}, "cap_reached": {"const": false}, "has_more": {"enum": [false, null]}}},
+           "unread_required_sources": {"maxItems": 0}, "failures": {"maxItems": 0}}}}
+      ]
+    },
+    "freshness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "refreshed_at", "items", "reason"],
+      "description": "Same shape as source.json freshness, as re-evaluated by the core (age, same run, recomputed hashes).",
+      "properties": {
+        "state": {"enum": ["fresh", "changed", "failed", "not_performed"]},
+        "refreshed_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "items": {
+          "type": "array", "maxItems": 128,
+          "items": {"type": "object", "additionalProperties": false,
+            "required": ["source_id", "previous_artifact_sha256", "current_artifact_sha256", "previous_normalized_text_sha256", "current_normalized_text_sha256", "observed_at", "status"],
+            "properties": {
+              "source_id": {"$ref": "#/$defs/id"},
+              "previous_artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+              "current_artifact_sha256": {"$ref": "#/$defs/sha256_or_null"},
+              "previous_normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+              "current_normalized_text_sha256": {"$ref": "#/$defs/sha256_or_null"},
+              "observed_at": {"$ref": "#/$defs/timestamp_or_null"},
+              "status": {"enum": ["unchanged", "changed", "failed", "not_refreshed"]}}}
+        },
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "fresh"}}},
+         "then": {"properties": {"refreshed_at": {"type": "string"}, "items": {"minItems": 1, "items": {"properties": {"status": {"const": "unchanged"}}}}}}},
+        {"if": {"properties": {"state": {"enum": ["failed", "not_performed"]}}},
+         "then": {"properties": {"reason": {"type": "string", "minLength": 1}}}}
+      ]
+    },
+    "submission_window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "deadline_at", "deadline_text", "timezone", "source_id", "reason"],
+      "properties": {
+        "state": {"enum": ["open", "closed", "locked", "unknown"]},
+        "deadline_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "deadline_text": {"type": ["string", "null"], "maxLength": 1024},
+        "timezone": {"type": ["string", "null"], "maxLength": 64, "pattern": "^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$"},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "server_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "observed_at", "source_id", "observed_filenames", "reason"],
+      "description": "Observed server state only; filenames never imply byte equality with local files.",
+      "properties": {
+        "status": {"enum": ["submitted", "not_submitted", "unknown"]},
+        "observed_at": {"$ref": "#/$defs/timestamp_or_null"},
+        "source_id": {"$ref": "#/$defs/id_or_null"},
+        "observed_filenames": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 255}},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"enum": ["submitted", "not_submitted"]}}},
+         "then": {"properties": {"observed_at": {"type": "string"}, "source_id": {"type": "string"}}}}
+      ]
+    },
+    "delta": {
+      "type": "object", "additionalProperties": false,
+      "required": ["previous_run_id", "files_added", "files_removed", "files_changed", "files_renamed", "sources_added", "sources_removed", "sources_changed", "requirements_added", "requirements_removed", "requirements_changed", "check_status_changes"],
+      "description": "Recheck comparison against an immutable previous snapshot. Every current status is recomputed from current bytes; prior passes are never reused.",
+      "properties": {
+        "previous_run_id": {"$ref": "#/$defs/id_or_null"},
+        "files_added": {"$ref": "#/$defs/id_list"},
+        "files_removed": {"$ref": "#/$defs/id_list"},
+        "files_changed": {"$ref": "#/$defs/id_list"},
+        "files_renamed": {
+          "type": "array", "maxItems": 1000,
+          "items": {"type": "object", "additionalProperties": false, "required": ["file_id", "previous_path", "current_path", "same_bytes"],
+            "properties": {"file_id": {"$ref": "#/$defs/id"}, "previous_path": {"$ref": "#/$defs/rel_path"}, "current_path": {"$ref": "#/$defs/rel_path"}, "same_bytes": {"type": "boolean"}}}
+        },
+        "sources_added": {"$ref": "#/$defs/id_list"},
+        "sources_removed": {"$ref": "#/$defs/id_list"},
+        "sources_changed": {"$ref": "#/$defs/id_list"},
+        "requirements_added": {"$ref": "#/$defs/id_list"},
+        "requirements_removed": {"$ref": "#/$defs/id_list"},
+        "requirements_changed": {"$ref": "#/$defs/id_list"},
+        "check_status_changes": {
+          "type": "array", "maxItems": 4096,
+          "items": {"type": "object", "additionalProperties": false, "required": ["check_id", "requirement_id", "previous_status", "current_status"],
+            "properties": {
+              "check_id": {"$ref": "#/$defs/id"},
+              "requirement_id": {"$ref": "#/$defs/id"},
+              "previous_status": {"enum": ["pass", "fail", "unknown", "not_applicable", null]},
+              "current_status": {"enum": ["pass", "fail", "unknown", "not_applicable"]}}}
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"previous_run_id": {"type": "null"}}},
+         "then": {"properties": {"files_removed": {"maxItems": 0}, "files_changed": {"maxItems": 0}, "files_renamed": {"maxItems": 0}, "sources_removed": {"maxItems": 0}, "sources_changed": {"maxItems": 0}, "requirements_removed": {"maxItems": 0}, "requirements_changed": {"maxItems": 0}}}}
+      ]
+    }
+  }
+}

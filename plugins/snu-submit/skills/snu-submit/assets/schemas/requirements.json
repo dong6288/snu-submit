@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:snu-submit:schema:requirements:1.0",
+  "title": "SNU Submit requirements and explicit selection",
+  "description": "Host-extracted requirements (data only, never code/regex/shell/tool instructions) plus the user's explicit submission selection. Structural contract only. The core MUST additionally: reject NaN/Infinity at JSON decoding; enforce unique requirement and file ids; resolve every source_id against the source bundle; verify normalized_text[span.start:span.end] == quote over the exact normalized text with locally recomputed hashes; verify start<end and min<=max; validate safe glob grammar, path containment and role/name ambiguity; honor supersession only with matching scope and preserved old/new evidence; compute the canonical manifest hash. An empty or all-non-applicable requirement list always yields needs_confirmation, never ready. A literal quote and source link do not prove correct extraction semantics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "requirements", "selection"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "requirements": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/requirement"}},
+    "selection": {"$ref": "#/$defs/selection"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "id_or_null": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha256_or_null": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"},
+    "text_or_null": {"type": ["string", "null"], "maxLength": 2048},
+    "rel_path": {"type": "string", "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:*?\"<>|\\u0000-\\u001f]+$", "description": "Forward-slash relative path. Core still enforces root containment, case-insensitive collisions and no links/junctions."},
+    "rel_path_or_null": {"type": ["string", "null"], "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:*?\"<>|\\u0000-\\u001f]+$"},
+    "name_or_null": {"type": ["string", "null"], "maxLength": 255, "pattern": "^(?!\\.{1,2}$)[^/\\\\:*?\"<>|\\u0000-\\u001f]+$", "description": "Exact base name, no directory part."},
+    "glob_or_null": {"type": ["string", "null"], "maxLength": 255, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\*\\*)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:\"<>|\\[\\]{}\\u0000-\\u001f]+$", "description": "Safe glob: only * and ? wildcards, no **, brackets, braces, absolute or traversal parts."},
+    "role": {"enum": ["report", "appendix", "code", "archive", "reference", "other"], "description": "reference = a bibliography/reference file that IS part of the submission. Guidance or reference material that is not submitted must go to selection.excluded."},
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "description": "Zero-based Unicode code point offsets into the exact normalized text; start inclusive, end exclusive. Core verifies start<end and the quote match.",
+      "properties": {
+        "start": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "end": {"type": "integer", "minimum": 1, "maximum": 2147483647}
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Page/paragraph/table location where meaningful. Never invent page numbers for browser text.",
+      "properties": {
+        "page": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "paragraph": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000000},
+        "table": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "row": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+        "column": {"type": ["integer", "null"], "minimum": 1, "maximum": 10000},
+        "char_start": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "char_end": {"type": ["integer", "null"], "minimum": 0, "maximum": 2147483647},
+        "label": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "selection_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id", "path", "role"],
+      "properties": {
+        "file_id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/rel_path", "description": "Exact path relative to the submission root."},
+        "role": {"$ref": "#/$defs/role"},
+        "sha256": {"$ref": "#/$defs/sha256_or_null", "description": "Optional; bound and verified locally by the core."}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolved", "files", "excluded", "unresolved_candidates", "manifest_sha256"],
+      "description": "Explicit user selection. Never filled by picking the newest of ambiguous candidates.",
+      "properties": {
+        "resolved": {"type": "boolean"},
+        "files": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/selection_file"}},
+        "excluded": {
+          "type": "array", "maxItems": 1000,
+          "items": {"type": "object", "additionalProperties": false, "required": ["path", "reason"],
+            "properties": {"path": {"$ref": "#/$defs/rel_path"}, "reason": {"enum": ["guidance", "reference_material", "report_output", "draft", "not_submitted", "other"]}}}
+        },
+        "unresolved_candidates": {
+          "type": "array", "maxItems": 100,
+          "items": {"type": "object", "additionalProperties": false, "required": ["paths", "reason"],
+            "properties": {
+              "paths": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"$ref": "#/$defs/rel_path"}},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 1024}}}
+        },
+        "manifest_sha256": {"$ref": "#/$defs/sha256_or_null", "description": "null before local binding; core computes the canonical manifest hash."}
+      },
+      "allOf": [
+        {"if": {"properties": {"resolved": {"const": true}}},
+         "then": {"properties": {"files": {"minItems": 1}, "unresolved_candidates": {"maxItems": 0}}}}
+      ]
+    },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["course_id", "assignment_id", "section_id", "audience", "status", "reason"],
+      "properties": {
+        "course_id": {"$ref": "#/$defs/id_or_null"},
+        "assignment_id": {"$ref": "#/$defs/id_or_null"},
+        "section_id": {"$ref": "#/$defs/id_or_null"},
+        "audience": {"$ref": "#/$defs/id_or_null"},
+        "status": {"enum": ["applies", "not_applicable", "unknown"]},
+        "reason": {"$ref": "#/$defs/text_or_null"}
+      }
+    },
+    "supersession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "correction_source_id", "correction_quote", "correction_span", "scope_matched"],
+      "description": "Explicit correction replacing an older requirement. The older requirement stays in the list with state 'superseded'. A newer timestamp alone is never authority.",
+      "properties": {
+        "requirement_id": {"$ref": "#/$defs/id"},
+        "correction_source_id": {"$ref": "#/$defs/id"},
+        "correction_quote": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "correction_span": {"$ref": "#/$defs/span"},
+        "scope_matched": {"type": "boolean", "description": "Claimed course/assignment/section/audience match; core re-verifies and ignores the correction when false or unverifiable."}
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "role", "exact_name", "safe_glob", "archive_name", "entry_path"],
+      "description": "Deterministic target selector. Exactly the fields of the declared mode are non-null.",
+      "properties": {
+        "mode": {"enum": ["all", "role", "exact_name", "safe_glob", "archive_entry"]},
+        "role": {"anyOf": [{"$ref": "#/$defs/role"}, {"type": "null"}]},
+        "exact_name": {"$ref": "#/$defs/name_or_null"},
+        "safe_glob": {"$ref": "#/$defs/glob_or_null"},
+        "archive_name": {"$ref": "#/$defs/name_or_null", "description": "Exact base name of the outer archive file in the selection."},
+        "entry_path": {"$ref": "#/$defs/rel_path_or_null", "description": "Exact path inside the archive; kept separate from the outer file path."}
+      },
+      "allOf": [
+        {"if": {"properties": {"mode": {"const": "all"}}}, "then": {"properties": {"role": {"type": "null"}, "exact_name": {"type": "null"}, "safe_glob": {"type": "null"}, "archive_name": {"type": "null"}, "entry_path": {"type": "null"}}}},
+        {"if": {"properties": {"mode": {"const": "role"}}}, "then": {"properties": {"role": {"type": "string"}, "exact_name": {"type": "null"}, "safe_glob": {"type": "null"}, "archive_name": {"type": "null"}, "entry_path": {"type": "null"}}}},
+        {"if": {"properties": {"mode": {"const": "exact_name"}}}, "then": {"properties": {"role": {"type": "null"}, "exact_name": {"type": "string"}, "safe_glob": {"type": "null"}, "archive_name": {"type": "null"}, "entry_path": {"type": "null"}}}},
+        {"if": {"properties": {"mode": {"const": "safe_glob"}}}, "then": {"properties": {"role": {"type": "null"}, "exact_name": {"type": "null"}, "safe_glob": {"type": "string"}, "archive_name": {"type": "null"}, "entry_path": {"type": "null"}}}},
+        {"if": {"properties": {"mode": {"const": "archive_entry"}}}, "then": {
+          "properties": {"exact_name": {"type": "null"}, "safe_glob": {"type": "null"}, "entry_path": {"type": "string"}, "role": {"enum": ["archive", null]}},
+          "anyOf": [{"properties": {"archive_name": {"type": "string"}}}, {"properties": {"role": {"const": "archive"}}}]}}
+      ]
+    },
+    "cardinality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "description": "How many selected files/entries the selector must resolve to. max null = unbounded. Core verifies min<=max and reports violations against the selector, not an unrelated file.",
+      "properties": {
+        "min": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "max": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000}
+      }
+    },
+    "user_confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "source_id", "quote", "confirmed_at", "file_id", "file_sha256", "entry_path", "location", "decision", "statement"],
+      "description": "Specific user confirmation for ONE content requirement on ONE current file. Invalid once file_sha256 differs from current bytes. Cannot clear parser/access/collection/hash failures. No blanket approval exists.",
+      "properties": {
+        "requirement_id": {"$ref": "#/$defs/id"},
+        "source_id": {"$ref": "#/$defs/id"},
+        "quote": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "confirmed_at": {"$ref": "#/$defs/timestamp"},
+        "file_id": {"$ref": "#/$defs/id"},
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "entry_path": {"$ref": "#/$defs/rel_path_or_null"},
+        "location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]},
+        "decision": {"enum": ["confirmed_present", "confirmed_absent"]},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 2048}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_id", "quote", "span", "source_location", "axis", "mandatory", "state", "applicability", "supersedes", "kind", "operator", "value", "unit", "target_scope", "selector", "cardinality", "quantifier", "user_confirmation"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "source_id": {"$ref": "#/$defs/id"},
+        "quote": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "span": {"$ref": "#/$defs/span"},
+        "source_location": {"anyOf": [{"$ref": "#/$defs/location"}, {"type": "null"}]},
+        "axis": {"enum": ["instructor_requirement", "system_constraint"], "description": "Kept separate; no automatic priority between axes."},
+        "mandatory": {"type": "boolean"},
+        "state": {"enum": ["confirmed", "ambiguous", "conflict", "superseded"]},
+        "applicability": {"$ref": "#/$defs/applicability"},
+        "supersedes": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/supersession"}},
+        "kind": {"enum": ["exists", "count", "filename", "extension", "format", "size_bytes", "pages", "text_chars", "text_words", "content", "deadline"]},
+        "operator": {"enum": ["eq", "lt", "lte", "gt", "gte", "exists", "contains"]},
+        "value": {"type": ["integer", "number", "string", "null"]},
+        "unit": {"enum": ["bytes", "KiB", "MiB", "MB_unspecified", "pages", "files", "characters", "characters_no_whitespace", "whitespace_words", null], "description": "MiB/KiB are binary and normalized to bytes by the core. MB_unspecified = source says MB without defining it: pass only if within both 10^6 and 2^20 interpretations, fail only if beyond both, otherwise unknown. characters = Unicode code points of NFC extracted text excluding CR/LF; characters_no_whitespace excludes all Unicode whitespace. Unknown counting conventions must use state 'ambiguous'."},
+        "target_scope": {"enum": ["submission_set", "file", "archive_entry"]},
+        "selector": {"$ref": "#/$defs/selector"},
+        "cardinality": {"$ref": "#/$defs/cardinality"},
+        "quantifier": {"enum": ["each", "all", "exists"]},
+        "user_confirmation": {"anyOf": [{"$ref": "#/$defs/user_confirmation"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"target_scope": {"const": "archive_entry"}}},
+         "then": {"properties": {"selector": {"properties": {"mode": {"const": "archive_entry"}}}}},
+         "else": {"properties": {"selector": {"properties": {"mode": {"enum": ["all", "role", "exact_name", "safe_glob"]}}}}}},
+        {"if": {"properties": {"kind": {"const": "content"}}}, "else": {"properties": {"user_confirmation": {"type": "null"}}}},
+        {"if": {"properties": {"kind": {"const": "exists"}}},
+         "then": {"properties": {"operator": {"const": "exists"}, "value": {"type": "null"}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "count"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "integer", "minimum": 0, "maximum": 1000}, "unit": {"const": "files"}, "target_scope": {"const": "submission_set"}}}},
+        {"if": {"properties": {"kind": {"const": "filename"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "contains"]}, "value": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^/\\\\:*?\"<>|\\u0000-\\u001f]+$"}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "extension"}}},
+         "then": {"properties": {"operator": {"const": "eq"}, "value": {"enum": [".pdf", ".docx", ".zip", ".txt", ".md", ".hwp", ".hwpx", ".py", ".ipynb", ".c", ".cpp", ".h", ".java", ".js", ".csv", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"]}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "format"}}},
+         "then": {"properties": {"operator": {"const": "eq"}, "value": {"enum": ["pdf", "docx", "zip", "text", "hwp", "hwpx", "png", "jpeg"], "description": "Detected by signature. hwp/hwpx contents are not parsed in this alpha."}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "size_bytes"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "number", "minimum": 0, "maximum": 1000000000000}, "unit": {"enum": ["bytes", "KiB", "MiB", "MB_unspecified"]}},
+           "if": {"properties": {"unit": {"const": "bytes"}}}, "then": {"properties": {"value": {"type": "integer"}}}}},
+        {"if": {"properties": {"kind": {"const": "pages"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "integer", "minimum": 0, "maximum": 100000}, "unit": {"const": "pages"}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "text_chars"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "integer", "minimum": 0, "maximum": 100000000}, "unit": {"enum": ["characters", "characters_no_whitespace"]}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "text_words"}}},
+         "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "integer", "minimum": 0, "maximum": 100000000}, "unit": {"const": "whitespace_words"}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+        {"if": {"properties": {"kind": {"const": "content"}}},
+         "then": {"properties": {"operator": {"const": "contains"}, "value": {"type": "string", "minLength": 1, "maxLength": 1024}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}},
+           "description": "Never passes on model assertion; only a matching user_confirmation on current bytes can pass."}},
+        {"if": {"properties": {"kind": {"const": "deadline"}}},
+         "then": {"properties": {"operator": {"const": "lte"}, "value": {"type": ["string", "null"], "maxLength": 40, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"}, "unit": {"const": null}, "target_scope": {"const": "submission_set"}},
+           "if": {"properties": {"value": {"type": "null"}}}, "then": {"properties": {"state": {"enum": ["ambiguous", "conflict", "superseded"]}}},
+           "description": "Window axis only; unresolved/relative dates keep value null and are never file readiness."}}
+      ]
+    }
+  }
+}

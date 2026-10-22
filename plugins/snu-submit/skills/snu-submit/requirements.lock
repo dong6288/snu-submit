@@ -1,0 +1,33 @@
+# SNU Submit 0.1.0-alpha.1 (offline-preview) - hash-pinned runtime lock.
+#
+# Install into a venv OUTSIDE the plugin cache:
+#   python -m pip install --require-hashes --only-binary=:all: -r requirements.lock
+#
+# Seven exact pins, wheels only, from public PyPI artifacts. Six are
+# py3-none-any wheels. rpds-py carries four allowed hashes for:
+#   CPython 3.11 / 3.12 on Linux manylinux_2_17 x86_64 and Windows amd64.
+# Any other Python version or platform has no allowed artifact here and the
+# install must fail rather than fall back to an unhashed or source build.
+#
+# Status: hash values supplied by the coordinator from downloaded wheels and
+# PyPI metadata. Installation from THIS lock file has not been verified on any
+# target. Linux and Python 3.11 targets are unverified.
+--only-binary=:all:
+
+attrs==26.1.0 \
+    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+jsonschema==4.26.0 \
+    --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
+jsonschema-specifications==2025.9.1 \
+    --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
+pypdf==6.21.2 \
+    --hash=sha256:1d44d1a3a200f25062adff0085b02040e4646431ac2ccac22e42679e91466084
+referencing==0.37.0 \
+    --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
+rpds-py==2026.9.1 \
+    --hash=sha256:136a1c3fe4402b7008bc81cb62ee538481795b61a7e83df88dff3b3f02b726ff \
+    --hash=sha256:ce4d4f52e2a4324396caddbd45a97d8d7be5f42edd25d2355282a9c34f9b2f7f \
+    --hash=sha256:addeda51556dac7c1a2f14cda62db8b621cd12afba3091d03a96c72932387eab \
+    --hash=sha256:5ce8943f79c2210f7abcc28e86367b03b28d95027fd01c46d2472373ae70c86f
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
