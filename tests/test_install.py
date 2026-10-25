@@ -20,12 +20,12 @@ POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
 POLICY_MARKERS = ("running scripts is disabled", "PSSecurityException", "UnauthorizedAccess")
 
 ROW = {"name": "snu-submit", "marketplaceName": "snu-submit", "pluginId": "snu-submit@snu-submit",
-       "version": "0.1.0-alpha.1", "installed": True, "enabled": True, "source": {"type": "local"}}
+       "version": "0.1.0-alpha.3", "installed": True, "enabled": True, "source": {"type": "local"}}
 
 
 def run_ps(args, env=None, cwd=None):
     result = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", *args], capture_output=True, text=True,
-                            timeout=120, env=env, cwd=cwd)
+                            errors="replace", timeout=120, env=env, cwd=cwd)
     if any(marker in result.stderr for marker in POLICY_MARKERS):
         raise unittest.SkipTest("execution policy blocks local scripts; not bypassed")
     return result

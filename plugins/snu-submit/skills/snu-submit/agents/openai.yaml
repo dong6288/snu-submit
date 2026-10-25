@@ -1,4 +1,4 @@
 interface:
   display_name: "SNU Submit"
-  short_description: "eTL 로그인 후 제출 파일이 과제 요건에 맞는지 점검 (자동 제출 없음)"
-  default_prompt: "$snu-submit 으로 첨부한 과제 파일이 eTL 과제 요건에 맞는지 점검해 줘. 제출은 내가 직접 할게."
+  short_description: "eTL 과제 요건과 제출 파일 내용을 대조해 제출 전 점검 (자동 제출 없음)"
+  default_prompt: "$snu-submit 이 파일 그대로 제출해도 되는지 eTL 과제 요건과 대조해 줘. 제출은 내가 직접 할게."

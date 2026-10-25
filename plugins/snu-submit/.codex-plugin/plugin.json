@@ -1,6 +1,6 @@
 {
   "name": "snu-submit",
-  "version": "0.1.0-alpha.2",
-  "description": "SNU Submit (offline-preview alpha): 사용자가 고른 한 과제의 근거 있는 요구사항과 사용자가 고른 로컬 제출 파일을 읽기 전용으로 비교해 pass/fail/unknown과 스냅샷 해시를 보고합니다. 업로드, 최종 제출, 메일 발송, 답안 채점은 하지 않습니다.",
+  "version": "0.1.0-alpha.3",
+  "description": "SNU Submit (alpha): 서울대 eTL 과제 제출 직전 점검. 로그인된 Chrome에서 과제 안내·공지·첨부의 제출 요건을 읽고, 제출 파일(ZIP·PDF·Office·HWPX·Python)의 실제 내용과 대조해 PASS / PASS_WITH_LIMITS / 수정 필요 / 확인 필요를 알려 줍니다. 업로드, 최종 제출, 메일 발송, 답안 채점, 원본 수정은 하지 않습니다.",
   "skills": "./skills/"
 }

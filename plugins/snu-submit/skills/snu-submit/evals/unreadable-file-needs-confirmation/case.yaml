@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: unreadable-file-needs-confirmation
+expected_outcome: |
+  가상 과제 재현. 「Homework 5」(공업수학 2 001)는 문제 1–4 풀이를 PDF 하나로 올리라고 한다.
+  학생의 HW5_solution.pdf는 PDF 머리만 있고 구조가 깨져 열리지 않는다(파서 실패).
+  기대 답변: 판정 확인 필요, 파일을 열거나 읽지 못해 내용(문제 1–4)을 확인하지 못했다는 사실,
+  다시 내보내 PDF 뷰어로 열리는지 확인한 뒤 다시 점검하라는 안내. 내용 요건을 통과했다고 말하지 않는다.
+context:
+  scaffold_script: place-files.sh

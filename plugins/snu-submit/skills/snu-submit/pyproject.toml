@@ -5,8 +5,8 @@
 
 [project]
 name = "snu-submit"
-version = "0.1.0-alpha.2"
-description = "Offline-preview checker that compares explicitly selected local submission files with evidence-backed assignment requirements."
+version = "0.1.0-alpha.3"
+description = "Read-only checker that compares selected local submission files with evidence-backed SNU eTL assignment requirements."
 readme = { text = "See README.md at the repository root and SKILL.md in this directory.", content-type = "text/plain" }
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -25,6 +25,6 @@ classifiers = [
 ]
 
 [tool.snu-submit]
-classification = "offline-preview"
+classification = "alpha"
 lock = "requirements.lock"
 schemas = ["assets/schemas/source.json", "assets/schemas/requirements.json", "assets/schemas/checks.json"]

@@ -1,3 +1,3 @@
-"""SNU Submit local checker package (0.1.0-alpha.1, offline-preview)."""
+"""SNU Submit local checker package (0.1.0-alpha.3)."""
 
-__version__ = "0.1.0-alpha.1"
+__version__ = "0.1.0-alpha.3"

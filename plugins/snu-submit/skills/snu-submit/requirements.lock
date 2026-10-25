@@ -1,4 +1,4 @@
-# SNU Submit 0.1.0-alpha.1 (offline-preview) - hash-pinned runtime lock.
+# SNU Submit 0.1.0-alpha.3 - hash-pinned runtime lock (pins unchanged since 0.1.0-alpha.1).
 #
 # Install into a venv OUTSIDE the plugin cache:
 #   python -m pip install --require-hashes --only-binary=:all: -r requirements.lock

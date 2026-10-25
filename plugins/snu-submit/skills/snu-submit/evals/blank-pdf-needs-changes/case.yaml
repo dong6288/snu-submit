@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: blank-pdf-needs-changes
+expected_outcome: |
+  가상 과제 재현. 「주간 글쓰기 6: 비평문」(글쓰기의 기초 015)은 비평문(1,500자 내외)을 PDF 1개, 2쪽 이내로 내라고 한다.
+  학생의 writing6_essay.pdf는 2쪽짜리 정상 PDF지만 두 쪽 모두 글자·그림·그리기가 전혀 없는 빈 쪽이다
+  (내용을 넣기 전에 내보낸 빈 파일). 기대 답변: 판정 수정 필요, PDF의 모든 쪽이 비어 있어 비평문이 없다는 사실,
+  원본 문서에서 다시 PDF로 내보낸 뒤 글이 보이는지 확인하고 다시 점검하라는 안내. 스캔본일 수 있다며 제한부 통과로
+  넘기거나 내용 요건을 통과했다고 말하지 않는다.
+context:
+  scaffold_script: place-files.sh

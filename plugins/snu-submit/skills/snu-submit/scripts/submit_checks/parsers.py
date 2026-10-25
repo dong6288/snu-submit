@@ -1,4 +1,4 @@
-"""Bounded read-only text, PDF, ZIP and Office parsers.
+"""Bounded read-only text, PDF, ZIP, Office and HWPX parsers.
 
 parse_bytes() never opens caller paths, writes files of its own, uses the
 network or changes global state. It validates input in the calling process,
@@ -9,10 +9,16 @@ the standard library backs it with a file it unlinks immediately, in /dev/shm
 when available, otherwise in the temp directory, so parsed text can exist
 there in memory-mapped form until the call ends. It returns neutral facts; the
 core maps them to report fields. ZIP archives and Office packages use bounded
-in-memory reads with CRC and hashes. DOCX body paragraphs/tables, PPTX slide
-text and XLSX cells/formulas are read with DTD-free UTF-8 XML, including inside
-ZIP submissions. Python is parsed without execution. DOCX pagination and
-spreadsheet recalculation are not performed. Native formats remain incomplete.
+in-memory reads with CRC and hashes. DOCX body paragraphs/tables (equation
+text included), PPTX slide text, XLSX cells/formulas and HWPX section
+paragraphs are read with DTD-free UTF-8 XML, including inside ZIP submissions.
+Python is parsed without execution. DOCX pagination and spreadsheet
+recalculation are not performed. Native formats remain incomplete.
+
+Region kinds beyond the core set: "format_mismatch" (the bytes are a known,
+different format than the extension says) and "syntax_error" (Python source
+that does not parse). PDF pages with no text, no images and no drawing
+operators are counted in metrics.blank_pages.
 
 Callers that run this from a script must guard their entry point with
 `if __name__ == "__main__":` because the worker uses the "spawn" start method.
@@ -77,6 +83,8 @@ PDF_MAX_XOBJECTS_PER_PAGE = 200
 PDF_MAX_ANNOTS_PER_PAGE = 200
 PDF_EMBEDDED_ANNOTS = frozenset({"/FileAttachment", "/Widget", "/RichMedia", "/Screen", "/Movie", "/Sound", "/3D"})
 INLINE_IMAGE_RE = re.compile(rb"(?:^|\s)BI\s")
+# Any stroke/fill/shading/XObject/text-showing operator token; a page without one draws nothing.
+PAINT_OP_RE = re.compile(rb"(?:^|[\s\]\)>])(?:S|s|f\*?|F|B\*?|b\*?|sh|Do|Tj|TJ|'|\")(?=[\s\[\(</]|$)")
 TIMEOUT_KEY = "timeout_seconds"
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 30
@@ -85,7 +93,7 @@ MAX_RESULT_ITEMS = 10_000
 MAX_CAPTURED_OUTPUT_CHARS = 2048
 JOIN_GRACE_SECONDS = 2.0
 RESULT_KEYS = frozenset({"format", "status", "reason", "metrics", "pages", "text", "locations", "unread_regions", "archive_entries"})
-COUNT_METRIC_KEYS = ("text_chars", "text_chars_no_whitespace", "text_words", "paragraphs", "tables", "images", "entries", "uncompressed_bytes_read")
+COUNT_METRIC_KEYS = ("text_chars", "text_chars_no_whitespace", "text_words", "paragraphs", "tables", "images", "entries", "uncompressed_bytes_read", "blank_pages")
 METRIC_KEYS = frozenset({"size_bytes", "encoding", *COUNT_METRIC_KEYS})
 DOCX_MAX_PART_BYTES = 16 * 1024 * 1024
 DOCX_MAX_COLLECT_BYTES = 48 * 1024 * 1024
@@ -209,13 +217,16 @@ def _parse_raw(data, filename, limits=None):
     expected = EXPECTED_SIGNATURE.get(ext)
     if expected is not None and detected != expected:
         reason = f"declared extension {ext} expects {expected} signature; detected {detected or 'none'}"
-        return _result(detected or "unknown", "failed", reason, size, "parse_error")
+        # A known different signature is a certain format error; no signature may be a lenient file.
+        return _result(detected or "unknown", "failed", reason, size, "format_mismatch" if detected else "parse_error")
     if detected == "pdf":
         return _parse_pdf(data, size, limits, soft_deadline)
     if detected == "zip" and ext == ".docx":
         return _parse_docx(data, size, limits, soft_deadline)
     if detected == "zip" and ext in {".pptx", ".xlsx"}:
         return _parse_office(data, size, limits, soft_deadline, ext[1:])
+    if detected == "zip" and ext == ".hwpx":
+        return _parse_hwpx(data, size, limits, soft_deadline)
     if detected == "zip" and ext not in OOXML_LIKE_EXTENSIONS:
         return _parse_zip(data, size, limits, soft_deadline)
     if detected is not None:
@@ -235,7 +246,7 @@ def _parse_code_or_text(data, size, limits, filename):
         except SyntaxError as exc:
             result["status"] = "failed"
             result["reason"] = f"Python syntax error at line {exc.lineno}: {exc.msg}"
-            result["unread_regions"].append(_unread("parse_error", result["reason"]))
+            result["unread_regions"].append(_unread("syntax_error", result["reason"]))
     return result
 
 
@@ -341,14 +352,20 @@ def _pdf_page_objects(page):
 
 
 def _pdf_page_flags(page):
-    """Return (inline_image, embedded_annots, uncertain) for one page."""
+    """Return (inline_image, embedded_annots, uncertain, paints) for one page.
+
+    paints is False when the page's content stream (possibly absent) holds no
+    painting or text-showing operator, i.e. the page draws nothing.
+    """
     inline = False
     embedded = 0
     uncertain = False
+    paints = True
     try:
         contents = page.get_contents()
-        if contents is not None and INLINE_IMAGE_RE.search(contents.get_data()):
-            inline = True
+        data = b"" if contents is None else contents.get_data()
+        inline = bool(INLINE_IMAGE_RE.search(data))
+        paints = inline or bool(PAINT_OP_RE.search(data))
     except Exception:
         uncertain = True
     try:
@@ -361,7 +378,7 @@ def _pdf_page_flags(page):
             uncertain = True
     except Exception:
         uncertain = True
-    return inline, embedded, uncertain
+    return inline, embedded, uncertain, paints
 
 
 def _pdf_document_regions(reader):
@@ -411,7 +428,9 @@ def _parse_pdf_configured(pypdf, data, size, limits, soft_deadline):
     if type(page_count) is not int or page_count < 0:
         return _result("pdf", "failed", "PDF page tree is invalid", size, "parse_error")
     if page_count == 0:
-        return _result("pdf", "incomplete", "PDF has no pages", size, "other")
+        result = _result("pdf", "incomplete", "PDF has no pages", size, "other")
+        result["pages"] = 0
+        return result
     if page_count > limits["max_pdf_pages"]:
         reason = f"PDF has {page_count} pages, over parser budget {limits['max_pdf_pages']}; text not read"
         result = _result("pdf", "incomplete", reason, size, "budget_limit")
@@ -420,7 +439,7 @@ def _parse_pdf_configured(pypdf, data, size, limits, soft_deadline):
 
     max_chars = limits["max_text_chars"]
     parts, locations, unread = [], [], _pdf_document_regions(reader)
-    total = 0
+    total = blank = 0
     for index in range(page_count):
         number = index + 1
         if time.monotonic() > soft_deadline:
@@ -454,10 +473,13 @@ def _parse_pdf_configured(pypdf, data, size, limits, soft_deadline):
             parts.append(norm)
             total += len(norm)
         images, forms, walk_uncertain = _pdf_page_objects(page)
-        inline, embedded, flags_uncertain = _pdf_page_flags(page)
-        if not has_text:
+        inline, embedded, flags_uncertain, paints = _pdf_page_flags(page)
+        if not has_text and not (images or inline or forms or embedded or paints or walk_uncertain or flags_uncertain):
+            blank += 1
+            unread.append(_page_region("other", number, "blank page: no text, images or drawing operators"))
+        elif not has_text:
             kind = "scanned_page" if images or inline else "other"
-            unread.append(_page_region(kind, number, "no extractable text on page (blank, scanned, vector or image-only)"))
+            unread.append(_page_region(kind, number, "no extractable text on page (scanned, vector or image-only)"))
         elif images or inline:
             unread.append(_page_region("image", number, f"{images} image object(s){' and inline image data' if inline else ''}; image content not read"))
         if embedded:
@@ -477,6 +499,7 @@ def _parse_pdf_configured(pypdf, data, size, limits, soft_deadline):
     result["text"] = text
     result["locations"] = locations
     result["unread_regions"] = unread
+    result["metrics"]["blank_pages"] = blank
     if complete:
         # Counts are reported only when every page's text was read.
         result["metrics"].update(_text_metrics(text))
@@ -713,7 +736,7 @@ def _parse_zip(data, size, limits, soft_deadline):
         collect_cap = 0
         if safe and is_pdf_name:
             collect_cap = limits["max_pdf_bytes"]
-        elif safe and ext in OFFICE_EXTENSIONS:
+        elif safe and ext in OOXML_LIKE_EXTENSIONS:
             collect_cap = limits["max_archive_bytes"]
         elif safe and ext in TEXT_EXTENSIONS:
             collect_cap = limits["max_input_bytes"]
@@ -722,8 +745,12 @@ def _parse_zip(data, size, limits, soft_deadline):
         record["crc_ok"] = read["crc_ok"]
         record["sha256"] = read["sha256"]
         magic = read["magic"]
-        record["nested_archive"] = (ext not in OFFICE_EXTENSIONS and
-                                    (ext in ARCHIVE_EXTENSIONS or any(magic.startswith(m) for m in ARCHIVE_MAGIC)))
+        expected = EXPECTED_SIGNATURE.get(ext)
+        detected = _detect_signature(magic)
+        # An extension that names a document format is checked against its signature instead of being
+        # taken for a nested archive; unknown extensions with archive magic are nested archives.
+        record["nested_archive"] = ext in ARCHIVE_EXTENSIONS or (
+            expected is None and any(magic.startswith(m) for m in ARCHIVE_MAGIC))
         if read["problem"] is not None:
             add_unread(_zip_entry_region(read["problem"][0], index, read["problem"][1]))
             continue
@@ -732,6 +759,9 @@ def _parse_zip(data, size, limits, soft_deadline):
             continue
         if not safe:
             continue  # content of unsafe names is never bound to a path
+        if expected is not None and detected is not None and detected != expected:
+            add_unread(_zip_entry_region("format_mismatch", index, f"entry signature {detected} does not match extension {ext}"))
+            continue
         if read["too_large"]:
             add_unread(_zip_entry_region("budget_limit", index, "entry larger than its per-format parser budget; content not inspected"))
             continue
@@ -754,19 +784,24 @@ def _parse_zip(data, size, limits, soft_deadline):
         signature = _detect_signature(content[:16])
         if is_pdf_name and signature == "pdf":
             sub = _parse_pdf(content, len(content), sub_limits, soft_deadline)
-        elif ext in OFFICE_EXTENSIONS and signature == "zip":
+        elif ext in OOXML_LIKE_EXTENSIONS and signature == "zip":
             remaining = state["budget"] - state["used"]
             if remaining <= 0:
                 add_unread(_zip_entry_region("budget_limit", index, "shared uncompressed budget exhausted"))
                 continue
             sub_limits["max_uncompressed_bytes"] = remaining
-            sub = (_parse_docx(content, len(content), sub_limits, soft_deadline) if ext == ".docx" else
-                   _parse_office(content, len(content), sub_limits, soft_deadline, ext[1:]))
+            if ext == ".docx":
+                sub = _parse_docx(content, len(content), sub_limits, soft_deadline)
+            elif ext == ".hwpx":
+                sub = _parse_hwpx(content, len(content), sub_limits, soft_deadline)
+            else:
+                sub = _parse_office(content, len(content), sub_limits, soft_deadline, ext[1:])
             state["used"] += sub["metrics"]["uncompressed_bytes_read"] or 0
-        elif not is_pdf_name and signature is None:
+        elif not is_pdf_name and ext not in OOXML_LIKE_EXTENSIONS and signature is None:
             sub = _parse_code_or_text(content, len(content), sub_limits, raw_name)
         else:
-            add_unread(_zip_entry_region("parse_error", index, f"entry signature {signature or 'none'} does not match extension {ext}"))
+            kind = "format_mismatch" if signature else "parse_error"
+            add_unread(_zip_entry_region(kind, index, f"entry signature {signature or 'none'} does not match extension {ext}"))
             continue
         if sub["format"] == "pdf" and type(sub["pages"]) is int and sub["pages"] <= pages_left:
             pages_left -= sub["pages"]
@@ -778,6 +813,7 @@ def _parse_zip(data, size, limits, soft_deadline):
             "text_chars": sub["metrics"]["text_chars"],
             "text_chars_no_whitespace": sub["metrics"]["text_chars_no_whitespace"],
             "text_words": sub["metrics"]["text_words"],
+            "blank_pages": sub["metrics"]["blank_pages"],
         }
         text = sub["text"] or ""
         if text:
@@ -968,9 +1004,8 @@ DOCX_INLINE_UNREAD = {
     NS_W + "commentReference": ("other", "comment reference; comment content not inspected"),
     NS_W + "ruby": ("other", "ruby (phonetic guide) text not read"),
     NS_W + "contentPart": ("embedded_object", "content part not read"),
-    NS_M + "oMath": ("other", "equation (OMML) not read"),
-    NS_M + "oMathPara": ("other", "equation (OMML) not read"),
 }
+DOCX_MATH_TAGS = frozenset({NS_M + "oMath", NS_M + "oMathPara"})
 
 
 def _local(tag):
@@ -1013,6 +1048,11 @@ def _docx_inline(elem, out, found, depth):
         elif tag in DOCX_UNREAD_TAGS:
             kind = _docx_unread_kind(child)
             found.append((kind, f"{_local(tag)} content (image, shape, textbox or object) not read"))
+        elif tag in DOCX_MATH_TAGS:
+            # Equation characters are kept so an answer written as an equation is not "empty";
+            # the two-dimensional layout (fractions, scripts) is not reconstructed.
+            out.append("".join(node.text or "" for node in child.iter(NS_M + "t")))
+            found.append(("other", "equation text extracted without layout"))
         elif tag in DOCX_INLINE_UNREAD:
             found.append(DOCX_INLINE_UNREAD[tag])
         elif tag in (NS_W + "p", NS_W + "tbl"):
@@ -1045,7 +1085,11 @@ def _docx_paragraph(p, ctx, cell):
     ctx["images"] += sum(1 for kind, _ in found if kind == "image")
     for kind, detail in dict.fromkeys(found):  # one located region per distinct fact
         _docx_region(ctx, kind, detail, number, cell)
-    raw = "".join(out)
+    _ctx_emit(ctx, "".join(out), number, cell)
+
+
+def _ctx_emit(ctx, raw, number, cell):
+    """Normalize one paragraph's text and append it with its paragraph (and table cell) location."""
     if not raw:
         return
     if len(raw) > ctx["max_chars"] or _combining_run_exceeded(raw):
@@ -1122,14 +1166,35 @@ def _docx_blocks(container, ctx, depth, cell):
                 _docx_region(ctx, "unsupported_format", f"unsupported block element {key[:64]} not read")
 
 
+def _ctx_result(fmt, size, ctx, entries, state, status, reason, kind=None):
+    """Result for a paragraph-based package (DOCX, HWPX) from its walk context."""
+    if reason is not None and kind is not None:
+        _docx_region(ctx, kind, reason)
+    result = _result(fmt, status, reason, size)
+    metrics = result["metrics"]
+    metrics.update({"paragraphs": ctx["paragraphs"], "tables": ctx["tables"], "images": ctx["images"],
+                    "entries": len(entries), "uncompressed_bytes_read": state["used"]})
+    if status == "complete":
+        metrics.update(_text_metrics("".join(ctx["parts"])))  # counts only when the whole body was read
+    result["text"] = "".join(ctx["parts"])
+    result["locations"] = ctx["locations"]
+    result["unread_regions"] = ctx["unread"]
+    result["archive_entries"] = entries
+    return result
+
+
+def _new_walk_context(limits, deadline):
+    return {"parts": [], "locations": [], "unread": [], "total": 0, "max_chars": limits["max_text_chars"],
+            "paragraphs": 0, "tables": 0, "images": 0, "deadline": deadline, "stopped": False, "unsupported": set()}
+
+
 def _parse_docx(data, size, limits, soft_deadline):
     """DOCX body paragraphs/tables. Pagination and layout are never measured (pages stays null)."""
     zf, infos, problems, error = _zip_open(data, size, limits, "docx")
     if error is not None:
         return error
     state = {"budget": limits["max_uncompressed_bytes"], "used": 0, "deadline": soft_deadline}
-    ctx = {"parts": [], "locations": [], "unread": [], "total": 0, "max_chars": limits["max_text_chars"],
-           "paragraphs": 0, "tables": 0, "images": 0, "deadline": soft_deadline, "stopped": False, "unsupported": set()}
+    ctx = _new_walk_context(limits, soft_deadline)
     entries, xml_parts, present = [], {}, set()
     collected = 0
 
@@ -1176,19 +1241,7 @@ def _parse_docx(data, size, limits, soft_deadline):
                 _docx_region(ctx, "parse_error", f"{name}: {problem}")
 
     def finish(status, reason, kind=None):
-        if reason is not None and kind is not None:
-            _docx_region(ctx, kind, reason)
-        result = _result("docx", status, reason, size)
-        metrics = result["metrics"]
-        metrics.update({"paragraphs": ctx["paragraphs"], "tables": ctx["tables"], "images": ctx["images"],
-                        "entries": len(infos), "uncompressed_bytes_read": state["used"]})
-        if status == "complete":
-            metrics.update(_text_metrics("".join(ctx["parts"])))  # counts only when the whole body was read
-        result["text"] = "".join(ctx["parts"])
-        result["locations"] = ctx["locations"]
-        result["unread_regions"] = ctx["unread"]
-        result["archive_entries"] = entries
-        return result
+        return _ctx_result("docx", size, ctx, entries, state, status, reason, kind)
 
     def required(name):
         """Return (root, problem_status, reason) for a required XML part."""
@@ -1249,6 +1302,147 @@ def _parse_docx(data, size, limits, soft_deadline):
     complete = not ctx["unread"]
     reason = None if complete else f"{len(ctx['unread'])} unread or uninspected region(s); see unread_regions"
     return finish("complete" if complete else "incomplete", reason)
+
+
+# ---------------------------------------------------------------------------
+# HWPX (Hancom OWPML): Contents/sectionN.xml paragraphs, matched by local name
+# ---------------------------------------------------------------------------
+
+HWPX_MIMETYPE = b"application/hwp+zip"
+HWPX_SECTION_RE = re.compile(r"Contents/section(\d{1,4})\.xml")
+HWPX_SKIP = frozenset({"secPr", "linesegarray", "lineseg"})
+HWPX_NESTED = frozenset({"tbl", "subList", "drawText"})
+HWPX_OBJECTS = frozenset({"ole", "chart", "video", "textart"})
+HWPX_NOTES = frozenset({"header", "footer", "footNote", "endNote"})
+
+
+def _hwpx_text(t):
+    parts = [t.text or ""]
+    for child in t:
+        name = _local(child.tag)
+        parts.append({"tab": "\t", "lineBreak": "\n", "nbSpace": " ", "fwSpace": " ", "hyphen": "-"}.get(name, ""))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
+def _hwpx_collect(elem, out, nested, found, depth):
+    """Text of one paragraph; tables, cell lists and text boxes are queued as nested blocks."""
+    if depth > DOCX_MAX_XML_DEPTH:
+        found.append(("other", "inline structure too deep; not read"))
+        return
+    for child in elem:
+        name = _local(child.tag)
+        if name == "t":
+            out.append(_hwpx_text(child))
+        elif name in HWPX_NESTED or name == "p":
+            nested.append(child)
+        elif name == "pic":
+            found.append(("image", "picture content not read"))
+        elif name == "equation":
+            out.append("".join(node.text or "" for node in child.iter() if _local(node.tag) == "script"))
+            found.append(("other", "equation script extracted without layout"))
+        elif name in HWPX_OBJECTS:
+            found.append(("embedded_object", f"{name} content not read"))
+        elif name == "ctrl":
+            if any(_local(node.tag) in HWPX_NOTES for node in child.iter()):
+                found.append(("other", "header, footer or note content not read"))
+        elif name not in HWPX_SKIP:
+            _hwpx_collect(child, out, nested, found, depth + 1)
+
+
+def _hwpx_paragraph(p, ctx, depth):
+    ctx["paragraphs"] += 1
+    number = ctx["paragraphs"]
+    if number % 200 == 0 and time.monotonic() > ctx["deadline"]:
+        _docx_region(ctx, "budget_limit", "time budget reached; remaining body not read", number)
+        ctx["stopped"] = True
+        return
+    out, nested, found = [], [], []
+    _hwpx_collect(p, out, nested, found, 0)
+    ctx["images"] += sum(1 for kind, _ in found if kind == "image")
+    for kind, detail in dict.fromkeys(found):
+        _docx_region(ctx, kind, detail, number)
+    _ctx_emit(ctx, "".join(out), number, None)
+    for block in nested:
+        if ctx["stopped"]:
+            return
+        _hwpx_blocks(block, ctx, depth + 1)
+
+
+def _hwpx_blocks(elem, ctx, depth):
+    if depth > DOCX_MAX_BLOCK_DEPTH:
+        _docx_region(ctx, "other", "block nesting too deep; not read")
+        return
+    if _local(elem.tag) == "p":
+        _hwpx_paragraph(elem, ctx, depth)
+        return
+    if _local(elem.tag) == "tbl":
+        ctx["tables"] += 1
+    for child in elem:
+        if ctx["stopped"]:
+            return
+        if _local(child.tag) not in HWPX_SKIP:
+            _hwpx_blocks(child, ctx, depth + 1)
+
+
+def _parse_hwpx(data, size, limits, soft_deadline):
+    """HWPX body paragraphs (tables and text boxes in reading order). Layout and pages are not measured."""
+    zf, infos, problems, error = _zip_open(data, size, limits, "hwpx")
+    if error is not None:
+        return error
+    state = {"budget": limits["max_uncompressed_bytes"], "used": 0, "deadline": soft_deadline}
+    ctx = _new_walk_context(limits, soft_deadline)
+    entries, sections, mimetype, collected = [], {}, None, 0
+    for index, info in enumerate(infos):
+        record, safe, raw_name = _zip_new_record(index, info, problems)
+        entries.append(record)
+        if not safe:
+            _docx_region(ctx, "parse_error", f"entry {index}: unsafe name or type: " + "; ".join(record["unsafe_reasons"]))
+            continue
+        if record["is_dir"]:
+            problem = _zip_check_directory(zf, info, record, state)
+            if problem is not None:
+                _docx_region(ctx, problem[0], f"entry {index}: {problem[1]}")
+            continue
+        if record["encrypted"]:
+            _docx_region(ctx, "encrypted", f"entry {index}: encrypted entry; content not read")
+            continue
+        if state["used"] > state["budget"] or time.monotonic() > state["deadline"]:
+            _docx_region(ctx, "budget_limit", f"entry {index}: read budget exhausted before this entry")
+            continue
+        match = HWPX_SECTION_RE.fullmatch(raw_name)
+        wanted = raw_name == "mimetype" or match is not None
+        cap = max(0, min(DOCX_MAX_PART_BYTES, DOCX_MAX_COLLECT_BYTES - collected)) if wanted else 0
+        read = _zip_read_entry(zf, info, state, cap)
+        record["bytes_read"], record["crc_ok"], record["sha256"] = read["bytes_read"], read["crc_ok"], read["sha256"]
+        if read["problem"] is not None:
+            _docx_region(ctx, read["problem"][0], f"entry {index}: {read['problem'][1]}")
+        elif wanted and read["collected"] is None:
+            _docx_region(ctx, "budget_limit", f"entry {index}: part over its parser budget; not inspected")
+        elif raw_name == "mimetype":
+            mimetype = read["collected"]
+        elif match is not None:
+            sections[int(match.group(1))] = read["collected"]
+            collected += len(read["collected"])
+    zf.close()
+    if mimetype is None or mimetype.strip() != HWPX_MIMETYPE:
+        return _ctx_result("hwpx", size, ctx, entries, state, "failed",
+                           "not an HWPX package (mimetype missing or different)", "parse_error")
+    if not sections:
+        return _ctx_result("hwpx", size, ctx, entries, state, "failed", "HWPX package has no Contents/sectionN.xml", "parse_error")
+    for number in sorted(sections):
+        if ctx["stopped"]:
+            break
+        root, problem = _safe_xml_root(sections[number], soft_deadline)
+        if problem or _local(root.tag) != "sec":
+            _docx_region(ctx, "parse_error", f"Contents/section{number}.xml: {problem or 'unexpected root element'}")
+            continue
+        _hwpx_blocks(root, ctx, 0)
+    if ctx["paragraphs"] == 0 or not ctx["parts"]:
+        _docx_region(ctx, "other", "document body has no extractable paragraph text")
+    complete = not ctx["unread"]
+    reason = None if complete else f"{len(ctx['unread'])} unread or uninspected region(s); see unread_regions"
+    return _ctx_result("hwpx", size, ctx, entries, state, "complete" if complete else "incomplete", reason)
 
 
 # ---------------------------------------------------------------------------

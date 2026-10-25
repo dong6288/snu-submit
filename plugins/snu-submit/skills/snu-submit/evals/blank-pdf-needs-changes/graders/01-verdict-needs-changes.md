@@ -1,0 +1,7 @@
+---
+type: llm
+focus: trace
+weight: 1
+---
+
+The final answer gives the verdict 수정 필요 (needs changes), not PASS_WITH_LIMITS, PASS or 확인 필요.

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""SNU Submit read-only file review and archive diagnostics (0.1.0-alpha.2).
+"""SNU Submit read-only submission file checks (0.1.0-alpha.3).
 
-review inspects selected files with file-review/1 requirements and reports
-PASS_WITH_LIMITS when only documented content or source limitations remain.
-check/recheck/demo/sample retain archive-profile/1 diagnostics. Neither mode
-logs in to eTL, executes student code or grades answers. Outputs go to a NEW
-directory. Exit 0 means the command completed; read the verdict. Exit 1 means
-refused or failed; exit 2 means a usage error.
+inspect reads selected files (ZIP entries included) and shows their text so the
+host can identify the assignment and draft requirements. review checks the files
+against a file-review/1 profile and reports PASS, PASS_WITH_LIMITS, NEEDS_CHANGES
+or NEEDS_CONFIRMATION. check/recheck/demo/sample keep the older archive-profile/1
+diagnostics. Nothing here logs in to eTL, uploads, executes student code or
+grades answers. Outputs go to a NEW directory (default: ./.snu-submit/runs/...).
+Exit 0 means the command completed; read the verdict. Exit 1 means refused or
+failed; exit 2 means a usage error.
 """
 
 import argparse
@@ -29,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from submit_checks import archive_probes, parsers, file_review
 from submit_checks.core import MAX_JSON_BYTES, ValidationError, load_json_strict, read_file_bound  # noqa: E402
 
-TOOL_VERSION = "0.1.0-alpha.2"
+TOOL_VERSION = "0.1.0-alpha.3"
 REPORT_FORMAT = "archive-cli-report/1"
 SUMMARY_FORMAT = "archive-demo-summary/1"
 DEMO_VERSION = "archive-demo/1"
@@ -73,12 +75,25 @@ def _has_link(path):
         current = parent
 
 
-def _new_dir(path, inputs=()):
+def _default_run(command):
+    """./.snu-submit/runs/<local time>-<command>-<random> under the current directory."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return os.path.join(os.getcwd(), ".snu-submit", "runs", f"{stamp}-{command}-{secrets.token_hex(2)}")
+
+
+def _new_dir(path, inputs=(), make_parents=False):
     """Create a NEW output directory; refuse existing paths, links and overlap with inputs."""
     target = os.path.abspath(path)
     parent = os.path.dirname(target)
     if os.path.lexists(target):
         raise CliError("output already exists; choose a new directory")
+    if make_parents and not os.path.isdir(parent):
+        existing = parent
+        while not os.path.lexists(existing):
+            existing = os.path.dirname(existing)
+        if _has_link(existing):
+            raise CliError("output parent path contains a link or junction")
+        os.makedirs(parent)
     if not os.path.isdir(parent):
         raise CliError("output parent directory does not exist")
     if _has_link(parent):
@@ -520,38 +535,145 @@ def cmd_demo(args):
     return 0
 
 
+STATUS_KO = {"pass": "통과", "limited": "제한부 통과", "fail": "위반", "unknown": "확인 필요", "warning": "주의"}
+REVIEW_PAGE = ('<!DOCTYPE html>\n<html lang="ko"><head><meta charset="utf-8">'
+               '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">'
+               '<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><style>'
+               'body{{font:16px/1.6 system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 16px;color:#1b1b1b;background:#fff}}'
+               'table{{border-collapse:collapse;width:100%;margin:8px 0 24px}}td,th{{border:1px solid #bbb;padding:6px 8px;'
+               'text-align:left;vertical-align:top;overflow-wrap:anywhere}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}'
+               '.v{{font-size:28px;font-weight:700}}.fail{{color:#a40000}}.unknown{{color:#8a5a00}}.limited{{color:#00519e}}'
+               '.pass{{color:#0b6b2b}}</style></head><body><main>{body}</main></body></html>\n')
+
+
+def _short(path):
+    """ZIP entries are shown by their path inside the archive."""
+    return path.split("!", 1)[1] if "!" in path else path
+
+
+def _paths_text(paths, limit=4):
+    return ", ".join(_short(p) for p in paths[:limit]) + (f" 외 {len(paths) - limit}개" if len(paths) > limit else "")
+
+
+def _finding_line(finding):
+    paths = finding.get("paths") or ([finding["path"]] if finding.get("path") else [])
+    where = _paths_text(paths, 3) if len(paths) > 1 else ", ".join(
+        x for x in ((_short(paths[0]) if paths else None), finding.get("where")) if x)
+    return f"[{STATUS_KO.get(finding['status'], finding['status'])}] " + (f"{where}: " if where else "") + finding["message"]
+
+
+def review_html(report, include_content):
+    esc = _e
+
+    def status(value):
+        return f'<span class="{esc(value)}">{esc(STATUS_KO.get(value, value))}</span>'
+
+    def items(values):
+        values = list(values)
+        return "<ul>" + "".join(f"<li>{esc(v)}</li>" for v in values) + "</ul>" if values else "없음"
+
+    parts = [f'<p class="v {esc(report["verdict"].lower())}">{esc(report["verdict_label"])}</p>',
+             f'<p>{esc(report["summary"])}</p>',
+             f'<p>과제: {esc(report.get("assignment") or "(프로필에 적지 않음)")} · 점검 {esc(report["generated_at"])} · '
+             f'SNU Submit {esc(report.get("tool_version"))}</p><p><small>{esc(report["scope"])}</small></p>',
+             _table("요건별 결과", ["결과", "요건", "근거", "대응 파일", "확인 내용"],
+                    [[status(c["status"]), esc(c["description"]), esc(c["evidence"]),
+                      esc(", ".join(c["matched_paths"]) or "없음"),
+                      items(_finding_line(f) for f in c["findings"])] for c in report["checks"]]),
+             "<h2>직접 확인할 것</h2>" + items(report["manual_checks"]),
+             "<h2>요건 밖에서 확인이 필요한 문제</h2>" + items(_finding_line(f) for f in report["blocking"]),
+             _table("요건과 대응하지 않은 파일", ["파일", "결과", "메모"],
+                    [[esc(x["path"]), status(x["status"]), esc(x["message"])] for x in report["extra_files"]]),
+             "<h2>확인한 출처</h2>" + items(report["sources"]),
+             "<h2>출처 확인 한계</h2>" + items(report["source_limits"]),
+             _table("파일", ["파일", "형식", "바이트", "쪽", "결과", "제한·메모·문제", "SHA-256"],
+                    [[esc(f["path"]), esc(f["format"]), esc(f["bytes"]), esc(f["pages"]), status(f["status"]),
+                      items(f["problems"] + f["limits"] + f["notes"]), f'<code>{esc(f["sha256"])}</code>'] for f in report["files"]])]
+    if report.get("delta"):
+        d = report["delta"]
+        parts.append(_table("이전 점검과 비교", ["항목", "값"], [[esc(k), esc(json.dumps(v, ensure_ascii=False))] for k, v in d.items()]))
+    if include_content:
+        parts.extend(f'<details><summary>{esc(f["path"])} 추출한 내용</summary><pre>{esc(f.get("text") or "추출한 글자 없음")}</pre></details>'
+                     for f in report["files"])
+    parts.append("<p><small>JSON 보고서가 기준입니다. 이 점검은 제출 요건만 확인하며 답의 정답·내용의 질은 확인하지 않습니다. "
+                 "업로드·제출은 하지 않았습니다.</small></p>")
+    return REVIEW_PAGE.format(title=esc("SNU Submit 점검: " + report["verdict_label"]), body="".join(parts))
+
+
+def _print_review(report, out):
+    print(f"판정: {report['verdict_label']} ({report['verdict']}) — {report['summary']}")
+    if report.get("assignment"):
+        print(f"과제: {report['assignment']}")
+    for check in report["checks"]:
+        print(f"[{STATUS_KO[check['status']]}] {check['id']}: {check['description']}")
+        print(f"    근거: {check['evidence'][:300]}")
+        print(f"    대응 파일: {_paths_text(check['matched_paths']) or '없음'}")
+        for finding in check["findings"][:12]:
+            print("    - " + _finding_line(finding))
+        for section in check["sections"]:
+            body = f"내용 {section['body_chars']}자: {section['excerpt']}" if section["excerpt"] else "내용 없음"
+            print(f"    · 항목 '{section['heading']}' [{STATUS_KO[section['status']]}] {section['where'] or ''} {body}"[:400])
+    for title, values in (("요건 밖 확인 필요", [_finding_line(f) for f in report["blocking"]]),
+                          ("직접 확인할 것", report["manual_checks"]),
+                          ("요건과 대응하지 않은 파일", [f"{_short(x['path'])} [{STATUS_KO.get(x['status'], x['status'])}] {x['message'] or ''}"
+                                                       for x in report["extra_files"]]),
+                          ("출처 확인 한계", report["source_limits"])):
+        if values:
+            print(title + ":")
+            for value in values[:20]:
+                print("    - " + value)
+    if report.get("delta"):
+        d = report["delta"]
+        print(f"이전 점검과 비교: {d['previous_verdict']} → {d['current_verdict']}; 바뀐 파일 {d['files_changed'] or '없음'}; "
+              f"추가 {d['files_added'] or '없음'}; 빠짐 {d['files_removed'] or '없음'}; "
+              f"요건 변화 {[(c['id'], c['previous'], c['current']) for c in d['requirement_changes']] or '없음'}")
+    print(f"report.json: {os.path.join(out, 'report.json')}\nreport.html: {os.path.join(out, 'report.html')}")
+
+
 def cmd_review(args):
     profile = _load(args.profile)
-    report = file_review.inspect_files(args.file, profile)
-    report["generated_at"] = _now()
-    report["label"] = _label(args.label)
-    if not args.include_content:
-        for item in report["files"]:
-            item.pop("text", None)
-    out = _new_dir(args.output, [*args.file, args.profile])
+    prior = _load(args.previous, MAX_REPORT_JSON) if args.previous else None
+    try:
+        report = file_review.inspect_files(args.file, profile, include_text=args.include_content)
+        report["delta"] = file_review.compare_reports(prior, report) if prior is not None else None
+    except ValidationError as exc:
+        raise CliError(f"profile, previous report or file selection rejected: {exc}") from None
+    report.update(tool_version=TOOL_VERSION, generated_at=_now(), label=_label(args.label))
+    inputs = [*args.file, args.profile] + ([args.previous] if args.previous else [])
+    out = _new_dir(args.output or _default_run("review"), inputs, make_parents=True)
     _write_json(os.path.join(out, "report.json"), report)
-    esc = lambda value: html.escape(str(value), quote=True)
-    rows = "".join("<tr>" + "".join("<td>" + esc(value) + "</td>" for value in (
-        item["path"], item["status"], item["bytes"], item["format"],
-        "; ".join(item["problems"] + item["limits"]))) + "</tr>" for item in report["files"])
-    checks = "".join("<li><strong>" + esc(check["description"]) + "</strong>: " + esc(check["status"]) +
-                     "<p>근거: " + esc(check["evidence"]) + "</p><p>대응 파일: " +
-                     esc(", ".join(check["matched_paths"]) or "없음") + "</p><p>찾지 못한 필수 텍스트: " +
-                     esc(", ".join(check["missing_literals"]) or "없음") + "</p></li>" for check in report["checks"])
-    content = "".join("<details><summary>" + esc(item["path"]) + " 내용</summary><pre>" +
-                      esc(item.get("text") or "추출한 텍스트 없음") + "</pre></details>" for item in report["files"]) if args.include_content else ""
-    page = ('<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
-            '<title>SNU Submit 파일 점검</title><style>body{font:16px/1.6 system-ui;max-width:1200px;margin:40px auto;padding:0 20px}'
-            'table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:8px;text-align:left;overflow-wrap:anywhere}'
-            'pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:28px}</style>'
-            '<h1>' + esc(report["verdict"]) + '</h1><p>' + esc(report["summary"]) + '</p><p>' + esc(report["scope"]) +
-            '</p><p>점검 시각: ' + esc(report["generated_at"]) + '</p><h2>출처 확인 제한</h2><ul>' +
-            ''.join('<li>' + esc(limit) + '</li>' for limit in report["source_limits"]) +
-            '</ul><h2>요구사항</h2><ul>' + checks + '</ul><h2>파일 검사</h2><table><tr><th>파일</th><th>결과</th><th>바이트</th>'
-            '<th>형식</th><th>직접 확인할 내용·오류</th></tr>' + rows + '</table><h2>읽기 실패</h2><ul>' +
-            ''.join('<li>' + esc(f["path"] + ': ' + f["reason"]) + '</li>' for f in report["failures"]) + '</ul>' + content + '</html>')
-    _write(os.path.join(out, "report.html"), page)
-    print(f"verdict: {report['verdict']}\nreport: {os.path.join(out, 'report.json')}\nhtml: {os.path.join(out, 'report.html')}")
+    _write(os.path.join(out, "report.html"), review_html(report, args.include_content))
+    _print_review(report, out)
+    return 0
+
+
+def _lead_lines(text, limit=10):
+    lines = [line.strip() for line in (text or "").split("\n") if line.strip()]
+    return " / ".join(line[:120] for line in lines[:limit])
+
+
+def cmd_inspect(args):
+    try:
+        report = file_review.inspect_only(args.file)
+    except ValidationError as exc:
+        raise CliError(f"file selection rejected: {exc}") from None
+    report.update(tool_version=TOOL_VERSION, generated_at=_now())
+    out = _new_dir(args.output or _default_run("inspect"), args.file, make_parents=True)
+    _write_json(os.path.join(out, "inspection.json"), report)
+    print(f"파일 {len(report['files'])}개 (요건 없이 내용만 읽음, 원본은 바꾸지 않음)")
+    for f in report["files"]:
+        if f["os_metadata"]:
+            continue
+        print(f"- {f['path']} [{f['format']}, {f['bytes']} bytes, 쪽 {f['pages'] if f['pages'] is not None else '-'}, "
+              f"{STATUS_KO.get(f['status'], f['status'])}]")
+        if f.get("text") and not (f["format"] == "zip" and f["container"] is None):
+            print("    앞부분: " + _lead_lines(f["text"])[:600])
+        for label, values in (("문제", f["problems"]), ("제한", f["limits"]), ("메모", f["notes"])):
+            if values:
+                print(f"    {label}: " + "; ".join(values)[:600])
+    for failure in report["failures"]:
+        print(f"- {failure['path']}: {failure['reason']}")
+    print(f"inspection.json: {os.path.join(out, 'inspection.json')} (전체 추출 글자와 위치)")
     return 0
 
 
@@ -559,10 +681,14 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="snu_submit.py", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="check Python, dependencies, imports and packaged resources (no network, no login check)")
-    p = sub.add_parser("review", help="inspect selected files and ZIP contents against a file-review/1 profile")
+    p = sub.add_parser("inspect", help="read selected files (ZIP entries included) and show their text; no requirements")
+    p.add_argument("--file", action="append", required=True, help="selected local file; repeat for multiple files")
+    p.add_argument("--output", help="NEW directory for inspection.json (default: ./.snu-submit/runs/<time>-inspect-*)")
+    p = sub.add_parser("review", help="check selected files and ZIP contents against a file-review/1 profile")
     p.add_argument("--file", action="append", required=True, help="selected local file; repeat for multiple files")
     p.add_argument("--profile", required=True, help="file-review/1 JSON with source evidence and required file patterns")
-    p.add_argument("--output", required=True, help="NEW directory for report.json and report.html")
+    p.add_argument("--output", help="NEW directory for report.json and report.html (default: ./.snu-submit/runs/<time>-review-*)")
+    p.add_argument("--previous", help="earlier review report.json to compare with (results are recomputed, never reused)")
     p.add_argument("--label", default="파일 제출 요건 점검")
     p.add_argument("--include-content", action="store_true", help="include extracted text for the host's content review")
     for name, text in (("check", "inspect one ZIP with an archive-profile/1 JSON profile"),
@@ -587,13 +713,17 @@ def build_parser():
 
 
 def _safe_console():
-    """Never fail on console encoding (e.g. Windows cp949): keep the console's codec, escape what it cannot show.
+    """Never fail on console encoding (e.g. Windows cp949).
 
-    Only stdout/stderr are affected; report files are always written as UTF-8.
+    Piped output (an agent's shell) is UTF-8 unless PYTHONIOENCODING says otherwise; an interactive
+    console keeps its own codec and escapes what it cannot show. Report files are always UTF-8.
     """
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="backslashreplace")
+            if not stream.isatty() and not os.environ.get("PYTHONIOENCODING"):
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            else:
+                stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
             pass
 
@@ -604,6 +734,8 @@ def main(argv=None):
     try:
         if args.command == "doctor":
             return cmd_doctor(args)
+        if args.command == "inspect":
+            return cmd_inspect(args)
         if args.command == "review":
             return cmd_review(args)
         if args.command == "check":

@@ -1,4 +1,4 @@
-"""Core checker helpers (0.1.0-alpha.1, offline-preview).
+"""Core checker helpers (0.1.0-alpha.3).
 
 Currently provides one bounded strict JSON reader and structural validation
 against the three packaged schemas. load_json_strict() opens
@@ -19,6 +19,8 @@ import unicodedata
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
+
+from . import __version__
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -2349,7 +2351,7 @@ def assemble_report(bundle, source_binding, requirement_binding, selection_bindi
     if mode == "synthetic":
         notice = f"[{SYNTHETIC_LABEL}] 실제 과제의 준비 상태가 아닙니다. " + notice
     report = {
-        "report_schema_version": "1.0", "tool_version": "0.1.0-alpha.2", "rules_version": REPORT_RULES_VERSION,
+        "report_schema_version": "1.0", "tool_version": __version__, "rules_version": REPORT_RULES_VERSION,
         "run_id": run_id, "generated_at": finished_at, "inspection_started_at": started_at,
         "inspection_finished_at": finished_at, "mode": mode,
         "synthetic_label": SYNTHETIC_LABEL if mode == "synthetic" else None, "snapshot_notice": notice,

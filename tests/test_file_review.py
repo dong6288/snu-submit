@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -211,7 +212,7 @@ class ReviewTests(unittest.TestCase):
         out = self.root / 'output'
         result = subprocess.run([sys.executable, str(SCRIPTS / 'snu_submit.py'), 'review', '--file', str(path),
                                  '--profile', str(rules), '--output', str(out), '--include-content'],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding='utf-8', timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads((out / 'report.json').read_text(encoding='utf-8'))
         self.assertEqual(report['verdict'], 'PASS')
@@ -264,6 +265,266 @@ class ReviewTests(unittest.TestCase):
         entries['ppt/slideLayouts/layout.xml'] = f'<p:sldLayout xmlns:p="{ns}presentationml/2006/main"/>'
         entries['ppt/slideLayouts/_rels/layout.xml.rels'] = f'<Relationships xmlns="{ns}package/2006/relationships"><Relationship Id="image" Type="{ns}officeDocument/2006/relationships/image" Target="../media/missing.png"/></Relationships>'
         self.assertEqual(self.review('answer.pptx', archive(entries), profile('answer.pptx'))['verdict'], 'NEEDS_CONFIRMATION')
+
+
+W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+
+def docx_body(body_xml):
+    """A minimal DOCX whose w:body is body_xml (Word namespace prefix w, math prefix m)."""
+    return office('docx', f'<w:document xmlns:w="{W}" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">'
+                          f'<w:body>{body_xml}</w:body></w:document>')
+
+
+def paras(*texts):
+    return ''.join(f'<w:p><w:r><w:t xml:space="preserve">{t}</w:t></w:r></w:p>' for t in texts)
+
+
+IMAGE_PARA = '<w:p><w:r><w:drawing><pic xmlns="urn:x"><blip/></pic></w:drawing></w:r></w:p>'
+
+
+def pdf_pages(*pages):
+    """PDF with one page per item: a text string, None (blank page) or 'IMAGE' (image only)."""
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+    writer = PdfWriter()
+    for content in pages:
+        page = writer.add_blank_page(width=200, height=200)
+        if content is None:
+            continue
+        stream = DecodedStreamObject()
+        if content == 'IMAGE':
+            image = DecodedStreamObject()
+            image.set_data(b'\x00')
+            image.update({NameObject('/Type'): NameObject('/XObject'), NameObject('/Subtype'): NameObject('/Image'),
+                          NameObject('/Width'): NumberObject(1), NameObject('/Height'): NumberObject(1),
+                          NameObject('/ColorSpace'): NameObject('/DeviceGray'), NameObject('/BitsPerComponent'): NumberObject(8)})
+            page[NameObject('/Resources')] = DictionaryObject({NameObject('/XObject'): DictionaryObject(
+                {NameObject('/Im0'): writer._add_object(image)})})
+            stream.set_data(b'q 100 0 0 100 0 0 cm /Im0 Do Q')
+        else:
+            font = DictionaryObject({NameObject('/Type'): NameObject('/Font'), NameObject('/Subtype'): NameObject('/Type1'),
+                                     NameObject('/BaseFont'): NameObject('/Helvetica')})
+            page[NameObject('/Resources')] = DictionaryObject({NameObject('/Font'): DictionaryObject({NameObject('/F1'): font})})
+            lines = content.split('\n')
+            ops = ['BT /F1 10 Tf 12 TL 10 180 Td'] + [f'({line}) Tj T*' for line in lines] + ['ET']
+            stream.set_data(' '.join(ops).encode('latin-1'))
+        page[NameObject('/Contents')] = writer._add_object(stream)
+    data = io.BytesIO()
+    writer.write(data)
+    return data.getvalue()
+
+
+def hwpx(paragraph_xml):
+    hp = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
+    section = f'<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="{hp}">{paragraph_xml}</hs:sec>'
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, 'w') as z:
+        z.writestr('mimetype', 'application/hwp+zip')
+        z.writestr('Contents/section0.xml', section)
+        z.writestr('Contents/header.xml', '<hh:head xmlns:hh="urn:h"/>')
+    return out.getvalue()
+
+
+def req(rid, patterns, **extra):
+    return dict({'id': rid, 'description': rid, 'evidence': 'synthetic instruction', 'patterns': patterns}, **extra)
+
+
+def rules(*rows, limits=None):
+    return {'profile_version': 'file-review/1', 'requirements': list(rows), 'source_limits': limits or []}
+
+
+class ParserAdditionsTests(unittest.TestCase):
+    def test_blank_and_image_only_pdf_pages_are_told_apart(self):
+        blank = parsers.parse_bytes(pdf_pages(None, None), 'blank.pdf')
+        self.assertEqual((blank['pages'], blank['metrics']['blank_pages']), (2, 2))
+        mixed = parsers.parse_bytes(pdf_pages('Problem 1', 'IMAGE', None), 'mixed.pdf')
+        self.assertEqual(mixed['metrics']['blank_pages'], 1)
+        self.assertTrue(any(r['kind'] == 'scanned_page' and r['location'] == {'page': 2} for r in mixed['unread_regions']))
+
+    def test_known_foreign_signature_is_a_format_mismatch_also_inside_zip(self):
+        direct = parsers.parse_bytes(office('docx'), 'report.pdf')
+        self.assertEqual([r['kind'] for r in direct['unread_regions']], ['format_mismatch'])
+        nested = parsers.parse_bytes(archive({'report.pdf': office('docx'), 'notes.txt': b'\x89PNG\r\n\x1a\nxx'}), 'hw.zip')
+        self.assertEqual(sorted(r['kind'] for r in nested['unread_regions']), ['format_mismatch', 'format_mismatch'])
+        unsigned = parsers.parse_bytes(b'not a pdf at all', 'report.pdf')
+        self.assertEqual([r['kind'] for r in unsigned['unread_regions']], ['parse_error'])
+
+    def test_docx_equation_text_is_kept(self):
+        body = ('<w:p><w:r><w:t>Answer: </w:t></w:r><m:oMath><m:r><m:t>x=2</m:t></m:r></m:oMath></w:p>')
+        result = parsers.parse_bytes(docx_body(body), 'math.docx')
+        self.assertIn('x=2', result['text'])
+        self.assertTrue(any('equation text' in r['detail'] for r in result['unread_regions']))
+
+    def test_hwpx_paragraphs_tables_and_pictures(self):
+        body = ('<hp:p><hp:run><hp:t>1. 서론</hp:t></hp:run></hp:p>'
+                '<hp:p><hp:run><hp:t>본문<hp:tab/>내용</hp:t></hp:run></hp:p>'
+                '<hp:p><hp:run><hp:tbl><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>표 칸</hp:t></hp:run></hp:p>'
+                '</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run></hp:p>'
+                '<hp:p><hp:run><hp:pic/></hp:run></hp:p>')
+        result = parsers.parse_bytes(hwpx(body), 'report.hwpx')
+        self.assertEqual(result['format'], 'hwpx')
+        self.assertEqual(result['text'].split('\n'), ['1. 서론', '본문\t내용', '표 칸'])
+        self.assertEqual(result['metrics']['tables'], 1)
+        self.assertTrue(any(r['kind'] == 'image' and r['location'] == {'paragraph': 5} for r in result['unread_regions']))
+        inside = parsers.parse_bytes(archive({'report.hwpx': hwpx(body)}), 'hw.zip')
+        self.assertFalse(inside['archive_entries'][0]['nested_archive'])
+        self.assertIn('표 칸', inside['text'])
+        not_hwpx = archive({'Contents/section0.xml': '<x/>'})
+        self.assertEqual(parsers.parse_bytes(not_hwpx, 'fake.hwpx')['status'], 'failed')
+
+
+class ReviewVerdictTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def review(self, files, profile):
+        paths = []
+        for name, data in files.items():
+            path = self.root / name
+            path.write_bytes(data)
+            paths.append(str(path))
+        report = file_review.inspect_files(paths, profile)
+        for name, data in files.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+        return report
+
+    def test_missing_literal_is_a_violation_only_when_everything_was_read(self):
+        clean = self.review({'report.docx': docx_body(paras('1. 서론', '내용'))}, rules(req('r', ['report.docx'], text_contains=['결론'])))
+        self.assertEqual(clean['verdict'], 'NEEDS_CHANGES')
+        with_image = self.review({'report.docx': docx_body(paras('1. 서론', '내용') + IMAGE_PARA)},
+                                 rules(req('r', ['report.docx'], text_contains=['결론'])))
+        self.assertEqual(with_image['verdict'], 'NEEDS_CONFIRMATION')
+
+    def test_unmatched_or_extra_empty_files_do_not_fail_the_submission(self):
+        files = {'hw.zip': archive({'main.py': 'print(1)\n', 'pkg/__init__.py': '', '__MACOSX/._main.py': b'\x00\x05\x16\x07'})}
+        self.assertEqual(self.review(files, rules(req('code', ['hw.zip!main.py'])))['verdict'], 'PASS')
+        report = self.review(files, rules(req('code', ['hw.zip!*.py'])))
+        self.assertEqual(report['verdict'], 'PASS')
+        self.assertTrue(any(f['status'] == 'warning' for f in report['checks'][0]['findings']))
+        self.assertNotIn('hw.zip!__MACOSX/._main.py', report['checks'][0]['matched_paths'])
+
+    def test_missing_file_is_a_violation_even_when_another_file_is_unreadable(self):
+        report = self.review({'report.pdf': b'%PDF-1.4 broken'}, rules(req('report', ['report.pdf']), req('appendix', ['appendix.zip'])))
+        self.assertEqual(report['verdict'], 'NEEDS_CHANGES')
+        self.assertEqual([c['status'] for c in report['checks']], ['unknown', 'fail'])
+
+    def test_missing_entry_inside_an_unreadable_archive_is_unknown(self):
+        report = self.review({'hw.zip': b'PK\x03\x04 broken archive'}, rules(req('code', ['hw.zip!main.py'])))
+        self.assertEqual(report['verdict'], 'NEEDS_CONFIRMATION')
+        report = self.review({'hw.7z': b'7z\xbc\xaf\x27\x1c rest'}, rules(req('code', ['hw.7z!main.py'])))
+        self.assertEqual(report['verdict'], 'NEEDS_CONFIRMATION')
+
+    def test_blank_pdf_and_renamed_document_are_violations(self):
+        self.assertEqual(self.review({'report.pdf': pdf_pages(None)}, rules(req('r', ['report.pdf'])))['verdict'], 'NEEDS_CHANGES')
+        renamed = self.review({'report.pdf': office('docx')}, rules(req('r', ['report.pdf'])))
+        self.assertEqual(renamed['verdict'], 'NEEDS_CHANGES')
+        self.assertIn('형식 오류', renamed['checks'][0]['findings'][0]['message'])
+
+    def test_scanned_pages_give_a_limited_pass_with_manual_check(self):
+        report = self.review({'report.pdf': pdf_pages('Problem 1 answer', 'IMAGE')}, rules(req('r', ['report.pdf'])))
+        self.assertEqual(report['verdict'], 'PASS_WITH_LIMITS')
+        self.assertTrue(any('2쪽' in line for line in report['manual_checks']))
+
+    def test_format_name_and_page_rules(self):
+        files = {'report.docx': docx_body(paras('본문'))}
+        self.assertEqual(self.review(files, rules(req('r', ['report.*'], formats=['pdf'])))['verdict'], 'NEEDS_CHANGES')
+        files = {'hw3.pdf': pdf_pages('a', 'b', 'c')}
+        self.assertEqual(self.review(files, rules(req('r', ['*.pdf'], name_globs=['*_*_HW3.pdf'])))['verdict'], 'NEEDS_CHANGES')
+        self.assertEqual(self.review(files, rules(req('r', ['*.pdf'], pages={'max': 2})))['verdict'], 'NEEDS_CHANGES')
+        self.assertEqual(self.review(files, rules(req('r', ['*.pdf'], pages={'max': 3})))['verdict'], 'PASS')
+        docx = {'r.docx': docx_body(paras('본문'))}
+        self.assertEqual(self.review(docx, rules(req('r', ['r.docx'], pages={'max': 3})))['verdict'], 'NEEDS_CONFIRMATION')
+
+    def test_sections_detect_empty_answers_but_not_table_of_contents(self):
+        sections = [{'heading': '1. 구현 방법', 'until': '2. 실행 결과'}, {'heading': '2. 실행 결과', 'until': '3. 결론'},
+                    {'heading': '3. 결론', 'until': None}]
+        toc = paras('목차', '1. 구현 방법 ........ 1', '2. 실행 결과 ........ 2', '3. 결론 ........ 3')
+        filled = docx_body(toc + paras('1. 구현 방법', '병합 정렬', '2. 실행 결과', '0.3초', '3. 결론', '빠르다'))
+        report = self.review({'r.docx': filled}, rules(req('r', ['r.docx'], sections=sections)))
+        self.assertEqual(report['verdict'], 'PASS', report['checks'][0]['findings'])
+        empty = docx_body(toc + paras('1. 구현 방법', '병합 정렬', '2. 실행 결과', '3. 결론', '빠르다'))
+        report = self.review({'r.docx': empty}, rules(req('r', ['r.docx'], sections=sections)))
+        self.assertEqual(report['verdict'], 'NEEDS_CHANGES')
+        failed = [s for s in report['checks'][0]['sections'] if s['status'] == 'fail']
+        self.assertEqual([s['heading'] for s in failed], ['2. 실행 결과'])
+        self.assertEqual(failed[0]['where'], '문단 7')
+        image_only = docx_body(paras('1. 구현 방법', '병합 정렬', '2. 실행 결과') + IMAGE_PARA + paras('3. 결론', '빠르다'))
+        self.assertEqual(self.review({'r.docx': image_only}, rules(req('r', ['r.docx'], sections=sections)))['verdict'],
+                         'NEEDS_CONFIRMATION')
+
+    def test_inline_answer_markers_and_points_beside_headings(self):
+        doc = docx_body(paras('문제 1 (10점)', '문제 2 (10점)', '답: 42'))
+        sections = [{'heading': '문제 1', 'until': '문제 2'}, {'heading': '답:', 'until': None}]
+        report = self.review({'a.docx': doc}, rules(req('a', ['a.docx'], sections=sections)))
+        self.assertEqual([s['status'] for s in report['checks'][0]['sections']], ['fail', 'pass'])
+
+    def test_unsafe_archive_entry_blocks_pass_even_if_requirements_match(self):
+        files = {'hw.zip': archive({'report.txt': 'done', '../evil.txt': 'x'})}
+        self.assertEqual(self.review(files, rules(req('r', ['hw.zip!report.txt'])))['verdict'], 'NEEDS_CONFIRMATION')
+
+    def test_unmatched_empty_top_level_file_needs_confirmation(self):
+        files = {'report.txt': b'done', 'extra.txt': b''}
+        report = self.review(files, rules(req('r', ['report.txt'])))
+        self.assertEqual(report['verdict'], 'NEEDS_CONFIRMATION')
+        self.assertTrue(report['blocking'])
+
+    def test_profile_defaults_and_validation(self):
+        normalized = file_review.validate_profile({'profile_version': 'file-review/1',
+                                                   'requirements': [{'id': 'a', 'description': 'd', 'evidence': 'e', 'patterns': ['*.pdf']}]})
+        self.assertEqual((normalized['requirements'][0]['min_count'], normalized['source_limits']), (1, []))
+        for bad in ({'formats': ['p d f']}, {'name_globs': ['dir/x.pdf']}, {'pages': {'max': 0}},
+                    {'sections': [{'heading': 'a\nb'}]}, {'patterns': ['x.zip!../y']}, {'unknown': 1}):
+            with self.subTest(bad=bad), self.assertRaises(core.ValidationError):
+                file_review.validate_profile(rules(dict(req('a', ['*.pdf']), **bad)))
+
+
+class InspectAndCliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_cli(self, *args):
+        env = {k: v for k, v in os.environ.items() if k != 'PYTHONIOENCODING'}  # piped output must default to UTF-8
+        return subprocess.run([sys.executable, str(SCRIPTS / 'snu_submit.py'), *args], capture_output=True, text=True,
+                              timeout=120, cwd=self.root, encoding='utf-8', env=env)
+
+    def test_inspect_writes_default_run_folder_and_shows_text(self):
+        source = self.root / 'in' / 'hw.zip'
+        source.parent.mkdir()
+        source.write_bytes(archive({'report.docx': docx_body(paras('데이터구조 과제 3', '풀이'))}))
+        result = self.run_cli('inspect', '--file', str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('데이터구조 과제 3', result.stdout)
+        runs = list((self.root / '.snu-submit' / 'runs').iterdir())
+        self.assertEqual(len(runs), 1)
+        data = json.loads((runs[0] / 'inspection.json').read_text(encoding='utf-8'))
+        self.assertIn('풀이', next(f['text'] for f in data['files'] if f['path'] == 'hw.zip!report.docx'))
+
+    def test_review_previous_delta_and_korean_summary(self):
+        target = self.root / 'answer.txt'
+        target.write_text('first', encoding='utf-8')
+        profile_path = self.root / 'profile.json'
+        profile_path.write_text(json.dumps(rules(req('a', ['answer.txt'], text_contains=['final']))), encoding='utf-8')
+        first = self.run_cli('review', '--file', str(target), '--profile', str(profile_path), '--output', str(self.root / 'r1'))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn('판정: 수정 필요', first.stdout)
+        target.write_text('final answer', encoding='utf-8')
+        second = self.run_cli('review', '--file', str(target), '--profile', str(profile_path), '--output', str(self.root / 'r2'),
+                              '--previous', str(self.root / 'r1' / 'report.json'))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        report = json.loads((self.root / 'r2' / 'report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['verdict'], 'PASS')
+        self.assertEqual(report['delta']['files_changed'], ['answer.txt'])
+        self.assertEqual(report['delta']['requirement_changes'], [{'id': 'a', 'previous': 'fail', 'current': 'pass'}])
+        self.assertNotIn('text', report['files'][0])
 
 
 if __name__ == '__main__':

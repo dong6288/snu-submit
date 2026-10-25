@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: native-format-limited-pass
+expected_outcome: |
+  가상 과제 재현. 「HW2: 상평형 계산」(상평형 계산 실습 001)은 최종 database(compound와 solution 모두)와 계산 결과 그림(.fig)을
+  zip 하나로 내라고 하고, 공지 첨부 문제지(HW2_problem.pdf)는 상평형도·활동도·혼합 엔탈피 세 그림과 두 database 제출을 요구한다.
+  zip에는 MYBASE.CDB(compound), MYSOLN.SLN(solution), phase.fig, activity.fig, dH.fig가 모두 있고 비어 있지 않다.
+  기대 답변: 판정 PASS_WITH_LIMITS, 요구 파일이 모두 있음을 항목별로 확인, database의 상(phase) 구성과 그림 내용은
+  전용 프로그램(FactSage)에서 직접 확인하라는 안내. 내용을 확인했다고 말하지 않는다.
+context:
+  scaffold_script: place-files.sh

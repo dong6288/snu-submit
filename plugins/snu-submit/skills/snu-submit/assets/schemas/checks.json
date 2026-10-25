@@ -8,7 +8,7 @@
   "required": ["report_schema_version", "tool_version", "rules_version", "run_id", "generated_at", "inspection_started_at", "inspection_finished_at", "mode", "synthetic_label", "snapshot_notice", "assignment", "sources", "selection", "files", "checks", "coverage", "freshness", "verdict", "unknown_reasons", "submission_window", "server_receipt", "delta"],
   "properties": {
     "report_schema_version": {"const": "1.0"},
-    "tool_version": {"const": "0.1.0-alpha.1"},
+    "tool_version": {"type": "string", "pattern": "^0\\.1\\.0-alpha\\.[0-9]+$"},
     "rules_version": {"$ref": "#/$defs/id"},
     "run_id": {"$ref": "#/$defs/id"},
     "generated_at": {"$ref": "#/$defs/timestamp"},

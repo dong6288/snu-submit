@@ -3,6 +3,8 @@
 # matched below. Review `git status` before every commit.
 
 # --- Runs, snapshots and reports (private, per user) ---
+# Written by Install-SnuSubmit.ps1 with the local venv path.
+plugins/snu-submit/skills/snu-submit/runtime.json
 .snu-submit/
 **/.snu-submit/
 /runs/

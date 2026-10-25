@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: missing-and-empty-items
+expected_outcome: |
+  가상 과제 재현. 「과제 2: 그래프 탐색 구현」(프로그래밍 응용 003)은 bfs.py, report.docx, result.png를 hw2.zip으로 내라고 했지만,
+  10/23 [정정] 공지가 result.png 대신 run_log.txt를 넣으라고 바꿨다. 학생의 zip에는 run_log.txt가 없고,
+  report.docx의 「2. 실행 결과」 제목 아래가 비어 있다(바로 「3. 결론」이 나옴). result.png는 이제 필요 없다.
+  기대 답변: 판정 수정 필요, run_log.txt 누락(정정 공지 근거), 「2. 실행 결과」 빈 항목(위치 포함), 각각 고칠 방법.
+  result.png를 필수로 요구하지 않는다. 파일을 고치거나 제출하지 않는다.
+context:
+  scaffold_script: place-files.sh

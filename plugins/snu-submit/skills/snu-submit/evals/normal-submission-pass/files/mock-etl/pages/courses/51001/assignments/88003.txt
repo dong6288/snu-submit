@@ -1,0 +1,10 @@
+과제 3: 정렬 알고리즘 비교 보고서
+과제 제출
+마감 10월 30일 기준 오후 11:59 점수 20 제출물 유형 파일 업로드 파일 형식 pdf
+가능 2026년 10월 20일 오전 12:00 - 2026년 10월 30일 오후 11:59 (KST)
+Submit ONE PDF report comparing insertion sort, merge sort and quick sort.
+The report must contain the sections '1. Method', '2. Results' and '3. Conclusion' and must not exceed 4 pages.
+File name: StudentID_Name_HW3.pdf (e.g. 2026-00000_HongGildong_HW3.pdf).
+
+제출물
+제출 가능 — 아직 제출하지 않았습니다.

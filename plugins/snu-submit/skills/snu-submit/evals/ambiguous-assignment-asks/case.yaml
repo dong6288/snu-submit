@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: ambiguous-assignment-asks
+expected_outcome: |
+  가상 과제 재현. 학생은 재료공학실험 1(002) 「실험 보고서 3: 인장 시험」(PDF 요구)과
+  기계공학실험(001) 「Lab Report 3: Tensile Test」(DOCX 또는 PDF) 두 강좌에 비슷한 과제가 동시에 열려 있다.
+  lab_report_3.docx의 제목 "인장 시험 결과 보고서 (Tensile Test Report)"와 내용은 둘 다에 맞고 강좌를 가리키는 단서가 없다.
+  기대 답변: 하나를 임의로 고르거나 두 과제 요건을 합치지 않고, 두 후보와 각 근거를 보여 준 뒤
+  어느 과제인지 한 가지만 묻는다. 확정 전에는 최종 판정을 내리지 않는다.
+context:
+  scaffold_script: place-files.sh

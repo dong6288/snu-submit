@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deterministic public-source alpha ZIP of SNU Submit (0.1.0-alpha.2).
+"""Build a deterministic public-source alpha ZIP of SNU Submit (0.1.0-alpha.3).
 
     python tools/package_release.py --output <new .zip path>
 
@@ -23,7 +23,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-VERSION = "0.1.0-alpha.2"
+VERSION = "0.1.0-alpha.3"
 TOP = f"snu-submit-{VERSION}"
 SKILL = "plugins/snu-submit/skills/snu-submit"
 ALLOWLIST = (
@@ -39,10 +39,10 @@ ALLOWLIST = (
     f"{SKILL}/agents/openai.yaml",
     f"{SKILL}/pyproject.toml",
     f"{SKILL}/requirements.lock",
-    f"{SKILL}/references/chrome-etl.md",
+    f"{SKILL}/references/etl.md",
+    f"{SKILL}/references/evidence-api.md",
     f"{SKILL}/references/gmail.md",
-    f"{SKILL}/references/rules.md",
-    f"{SKILL}/references/file-review.md",
+    f"{SKILL}/references/profile.md",
     f"{SKILL}/assets/report.html",
     f"{SKILL}/assets/schemas/checks.json",
     f"{SKILL}/assets/schemas/requirements.json",

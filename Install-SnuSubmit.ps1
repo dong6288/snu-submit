@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install SNU Submit 0.1.0-alpha.1 (offline-preview) from this extracted folder into Codex.
+  Install SNU Submit 0.1.0-alpha.3 from this extracted folder into Codex.
 
 .DESCRIPTION
   Checks first, changes later:
@@ -9,14 +9,15 @@
        no Codex marketplace named "snu-submit" for a different folder. Any failure here stops before
        anything is created or installed. A newly created .venv tree is checked the same way before pip.
     1. .venv in this folder (an existing one is reused only if it is a real Python 3.11/3.12 venv),
-       pinned dependencies from requirements.lock (--require-hashes), "snu_submit.py doctor".
+       pinned dependencies from requirements.lock (--require-hashes), "snu_submit.py doctor", then
+       plugins\snu-submit\skills\snu-submit\runtime.json naming that venv's python.exe (the skill reads it).
     2. "codex plugin marketplace add <this folder>" unless it already points here.
     3. "codex plugin add snu-submit@snu-submit", then "codex plugin list --marketplace snu-submit --json"
        must show an installed, enabled snu-submit row from the snu-submit marketplace.
   No administrator rights, no execution-policy change, nothing deleted. The only Codex configuration
   this changes is the requested registration of the local "snu-submit" marketplace and plugin, which
-  the Codex CLI persists; no other setting is touched. Files are written only inside this folder (.venv and
-  Python __pycache__); pip runs with --no-cache-dir.
+  the Codex CLI persists; no other setting is touched. Files are written only inside this folder (.venv,
+  runtime.json and Python __pycache__); pip runs with --no-cache-dir.
   After success, save your work, fully quit and reopen the Codex (ChatGPT) desktop app and start a new
   local chat (https://developers.openai.com/plugins/build/plugins); this script does not restart the app.
   Registration, the installed CLI's doctor/sample, and the app's automatic skill discovery are separate checks.
@@ -26,7 +27,8 @@
   Optional full path to python.exe (3.11 or 3.12). Default: py launcher (3.12, then 3.11), then "python".
 
 .PARAMETER CodexExe
-  Optional Codex CLI command or full path. Default: "codex" on PATH.
+  Optional Codex CLI command or full path. Default: "codex" on PATH, otherwise the newest Codex desktop
+  CLI under %LOCALAPPDATA%\OpenAI\Codex\bin (it must support "codex plugin add").
 #>
 [CmdletBinding()]
 param(
@@ -178,7 +180,14 @@ if ($venvExists) {
     if (-not $isVenv) { Fail "$Venv exists but is not a Python virtual environment. It was not changed; move it away yourself or extract to a new folder." }
 }
 if (-not (Get-Command $CodexExe -ErrorAction SilentlyContinue)) {
-    Fail "Codex CLI '$CodexExe' not found. Install Codex and sign in first, or pass -CodexExe <path>."
+    # The Codex desktop app ships its CLI outside PATH; use the newest bundled copy when "codex" is not found.
+    $bundled = Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin") -Filter "codex.exe" -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($CodexExe -ne "codex" -or -not $bundled) {
+        Fail "Codex CLI '$CodexExe' not found. Install Codex and sign in first, or pass -CodexExe <path>."
+    }
+    $CodexExe = $bundled.FullName
+    Write-Host "Using the Codex desktop CLI: $CodexExe"
 }
 $listText = Invoke-Native $CodexExe @("plugin", "marketplace", "list", "--json") "codex plugin marketplace list"
 $action = Get-MarketplaceAction $listText $Root
@@ -215,6 +224,11 @@ Invoke-Native $VenvPy @("-m", "pip", "install", "--disable-pip-version-check", "
                         "--only-binary=:all:", "-r", $Lock) "pip install (hash-pinned requirements.lock)" | Out-Null
 Invoke-Native $VenvPy @($Cli, "doctor") "snu_submit.py doctor" | Out-Null
 Write-Host "      doctor: all checks ok (eTL login is not part of this check)"
+# The skill is copied into the Codex plugin cache; this file tells it which Python has the pinned dependencies.
+$Runtime = Join-Path $Skill "runtime.json"
+$runtimeText = [ordered]@{ format = "snu-submit-runtime/1"; python = $VenvPy; package_root = $Root; version = "0.1.0-alpha.3" } | ConvertTo-Json
+[IO.File]::WriteAllText($Runtime, $runtimeText + "`n", (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "      runtime: $Runtime"
 
 # --- stage 2: local marketplace (only this package) ---
 if ($action -eq "reuse") {
@@ -233,7 +247,7 @@ if (-not (Test-InstalledIdentity $plugins)) {
 }
 
 Write-Host ""
-Write-Host "Installed SNU Submit 0.1.0-alpha.1 (offline-preview, alpha)." -ForegroundColor Green
+Write-Host "Installed SNU Submit 0.1.0-alpha.3 (alpha)." -ForegroundColor Green
 Write-Host "  Package folder (keep it): $Root"
 Write-Host "  Python environment:       $VenvPy"
 Write-Host "  Local sample (synthetic): & `"$VenvPy`" `"$Cli`" sample --output <new folder>"
