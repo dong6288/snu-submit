@@ -1,4 +1,4 @@
 interface:
-  display_name: "SNU Submit (offline-preview)"
-  short_description: "선택한 한 과제의 요구사항 근거와 선택한 로컬 제출 파일을 읽기 전용으로 비교해 pass/fail/unknown 보고서를 만듭니다. 업로드·제출·메일 발송 없음. 0.1.0-alpha.1."
-  default_prompt: "SNU Submit으로 제출 전 점검을 시작해 줘. 먼저 환경을 점검하고, 점검할 과제 하나와 제출 파일 폴더, 결과를 둘 작업 위치를 물어봐. 업로드·최종 제출·메일 발송은 하지 마."
+  display_name: "SNU Submit"
+  short_description: "eTL 로그인 후 제출 파일이 과제 요건에 맞는지 점검 (자동 제출 없음)"
+  default_prompt: "$snu-submit 으로 첨부한 과제 파일이 eTL 과제 요건에 맞는지 점검해 줘. 제출은 내가 직접 할게."

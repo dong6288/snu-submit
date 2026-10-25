@@ -1,4 +1,4 @@
-"""Bounded byte-oriented parsers. Bootstrap: UTF-8 plaintext only.
+"""Bounded read-only text, PDF, ZIP and Office parsers.
 
 parse_bytes() never opens caller paths, writes files of its own, uses the
 network or changes global state. It validates input in the calling process,
@@ -8,16 +8,17 @@ memory (RawArray). On Windows that memory is an anonymous mapping; on POSIX
 the standard library backs it with a file it unlinks immediately, in /dev/shm
 when available, otherwise in the temp directory, so parsed text can exist
 there in memory-mapped form until the call ends. It returns neutral facts; the
-core maps them to report fields. UTF-8 text and PDF (pypdf, inside the worker
-only) are parsed; ZIP archives are inspected in memory (names, CRC, hashes,
-internal text/PDF entries) without extraction. DOCX body paragraphs/tables are
-read from the same bounded ZIP reader with DTD-free UTF-8 XML; DOCX pagination
-is never measured. HWPX/HWP and other formats return "incomplete".
+core maps them to report fields. ZIP archives and Office packages use bounded
+in-memory reads with CRC and hashes. DOCX body paragraphs/tables, PPTX slide
+text and XLSX cells/formulas are read with DTD-free UTF-8 XML, including inside
+ZIP submissions. Python is parsed without execution. DOCX pagination and
+spreadsheet recalculation are not performed. Native formats remain incomplete.
 
 Callers that run this from a script must guard their entry point with
 `if __name__ == "__main__":` because the worker uses the "spawn" start method.
 """
 
+import ast
 import ctypes
 import hashlib
 import io
@@ -56,7 +57,8 @@ DEFAULT_LIMITS = {
 ZIP_CHUNK_BYTES = 64 * 1024
 ZIP_MAX_NAME_CHARS = 300
 ZIP_MAX_UNREAD = 1000
-OOXML_LIKE_EXTENSIONS = frozenset({".docx", ".hwpx"})  # never generic ZIP; .docx -> _parse_docx, .hwpx unsupported
+OFFICE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
+OOXML_LIKE_EXTENSIONS = OFFICE_EXTENSIONS | {".hwpx"}
 ARCHIVE_EXTENSIONS = frozenset({".zip", ".7z", ".rar", ".gz", ".tgz", ".bz2", ".xz", ".tar", ".jar", ".zst"})
 ARCHIVE_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07", b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd")
 WINDOWS_RESERVED_NAMES = frozenset({"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)})
@@ -111,7 +113,7 @@ SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "png"),
     (b"\xff\xd8\xff", "jpeg"),
 )
-EXPECTED_SIGNATURE = {".pdf": "pdf", ".docx": "zip", ".zip": "zip", ".hwpx": "zip", ".hwp": "ole_compound"}
+EXPECTED_SIGNATURE = {".pdf": "pdf", ".docx": "zip", ".pptx": "zip", ".xlsx": "zip", ".zip": "zip", ".hwpx": "zip", ".hwp": "ole_compound", ".doc": "ole_compound", ".xls": "ole_compound"}
 UTF8_BOM = b"\xef\xbb\xbf"
 
 
@@ -207,11 +209,13 @@ def _parse_raw(data, filename, limits=None):
     expected = EXPECTED_SIGNATURE.get(ext)
     if expected is not None and detected != expected:
         reason = f"declared extension {ext} expects {expected} signature; detected {detected or 'none'}"
-        return _result(detected or "unknown", "incomplete", reason, size, "unsupported_format")
+        return _result(detected or "unknown", "failed", reason, size, "parse_error")
     if detected == "pdf":
         return _parse_pdf(data, size, limits, soft_deadline)
     if detected == "zip" and ext == ".docx":
         return _parse_docx(data, size, limits, soft_deadline)
+    if detected == "zip" and ext in {".pptx", ".xlsx"}:
+        return _parse_office(data, size, limits, soft_deadline, ext[1:])
     if detected == "zip" and ext not in OOXML_LIKE_EXTENSIONS:
         return _parse_zip(data, size, limits, soft_deadline)
     if detected is not None:
@@ -220,7 +224,19 @@ def _parse_raw(data, filename, limits=None):
     if ext not in TEXT_EXTENSIONS:
         reason = f"no supported parser for extension {ext or 'none'}; content not read"
         return _result("unknown", "incomplete", reason, size, "unsupported_format")
-    return _parse_text(data, size, limits)
+    return _parse_code_or_text(data, size, limits, filename)
+
+
+def _parse_code_or_text(data, size, limits, filename):
+    result = _parse_text(data, size, limits)
+    if _extension(filename) == ".py" and result["status"] == "complete":
+        try:
+            ast.parse(result["text"], filename=filename)
+        except SyntaxError as exc:
+            result["status"] = "failed"
+            result["reason"] = f"Python syntax error at line {exc.lineno}: {exc.msg}"
+            result["unread_regions"].append(_unread("parse_error", result["reason"]))
+    return result
 
 
 def _parse_text(data, size, limits):
@@ -586,7 +602,7 @@ def _zip_open(data, size, limits, fmt):
     if len(infos) > max_entries:
         reason = f"archive has {len(infos)} entries, over parser budget {max_entries}; not read"
         return None, None, None, _result(fmt, "incomplete", reason, size, "budget_limit")
-    if not infos:
+    if not infos and fmt != "zip":
         return None, None, None, _result(fmt, "incomplete", "archive has no entries", size, "other")
     # Names, types, duplicates and case/Unicode collisions (no content read).
     problems = [_zip_name_problems(info) for info in infos]
@@ -631,7 +647,7 @@ def _zip_check_directory(zf, info, record, state):
     """Directory entries must really be empty; read them like files. Returns a problem or None."""
     mode = (info.external_attr >> 16) & 0o170000
     if mode == 0o100000 or (info.external_attr & 0x10 and not info.is_dir()):
-        return ("other", "directory/file type inconsistent with entry name")
+        return ("parse_error", "directory/file type inconsistent with entry name")
     if record["encrypted"]:
         return ("encrypted", "encrypted directory entry; content not read")
     if state["used"] > state["budget"] or time.monotonic() > state["deadline"]:
@@ -643,7 +659,7 @@ def _zip_check_directory(zf, info, record, state):
     if read["problem"] is not None:
         return read["problem"]
     if read["bytes_read"] or info.file_size:
-        return ("other", "directory entry carries data; content not inspected")
+        return ("parse_error", "directory entry carries data; content not inspected")
     return None
 
 
@@ -651,6 +667,14 @@ def _parse_zip(data, size, limits, soft_deadline):
     zf, infos, problems, error = _zip_open(data, size, limits, "zip")
     if error is not None:
         return error
+    if not infos:
+        # zipfile read a structurally valid central directory with zero members: the entry
+        # list is completely known (and empty). Not inferred from the signature alone.
+        result = _result("zip", "complete", None, size)
+        result["text"] = ""
+        result["metrics"]["entries"] = 0
+        result["metrics"]["uncompressed_bytes_read"] = 0
+        return result
     state = {"budget": limits["max_uncompressed_bytes"], "used": 0, "deadline": soft_deadline}
     max_chars = limits["max_text_chars"]
     pages_left = limits["max_pdf_pages"]
@@ -677,7 +701,7 @@ def _parse_zip(data, size, limits, soft_deadline):
             continue
         file_entries += 1
         if (info.external_attr >> 16) & 0o170000 == 0o040000 or info.external_attr & 0x10:
-            add_unread(_zip_entry_region("other", index, "file entry marked as directory in attributes"))
+            add_unread(_zip_entry_region("parse_error", index, "file entry marked as directory in attributes"))
         if record["encrypted"]:
             add_unread(_zip_entry_region("encrypted", index, "encrypted entry; content not read"))
             continue
@@ -689,6 +713,8 @@ def _parse_zip(data, size, limits, soft_deadline):
         collect_cap = 0
         if safe and is_pdf_name:
             collect_cap = limits["max_pdf_bytes"]
+        elif safe and ext in OFFICE_EXTENSIONS:
+            collect_cap = limits["max_archive_bytes"]
         elif safe and ext in TEXT_EXTENSIONS:
             collect_cap = limits["max_input_bytes"]
         read = _zip_read_entry(zf, info, state, collect_cap)
@@ -696,7 +722,8 @@ def _parse_zip(data, size, limits, soft_deadline):
         record["crc_ok"] = read["crc_ok"]
         record["sha256"] = read["sha256"]
         magic = read["magic"]
-        record["nested_archive"] = ext in ARCHIVE_EXTENSIONS or any(magic.startswith(m) for m in ARCHIVE_MAGIC)
+        record["nested_archive"] = (ext not in OFFICE_EXTENSIONS and
+                                    (ext in ARCHIVE_EXTENSIONS or any(magic.startswith(m) for m in ARCHIVE_MAGIC)))
         if read["problem"] is not None:
             add_unread(_zip_entry_region(read["problem"][0], index, read["problem"][1]))
             continue
@@ -727,10 +754,19 @@ def _parse_zip(data, size, limits, soft_deadline):
         signature = _detect_signature(content[:16])
         if is_pdf_name and signature == "pdf":
             sub = _parse_pdf(content, len(content), sub_limits, soft_deadline)
+        elif ext in OFFICE_EXTENSIONS and signature == "zip":
+            remaining = state["budget"] - state["used"]
+            if remaining <= 0:
+                add_unread(_zip_entry_region("budget_limit", index, "shared uncompressed budget exhausted"))
+                continue
+            sub_limits["max_uncompressed_bytes"] = remaining
+            sub = (_parse_docx(content, len(content), sub_limits, soft_deadline) if ext == ".docx" else
+                   _parse_office(content, len(content), sub_limits, soft_deadline, ext[1:]))
+            state["used"] += sub["metrics"]["uncompressed_bytes_read"] or 0
         elif not is_pdf_name and signature is None:
-            sub = _parse_text(content, len(content), sub_limits)
+            sub = _parse_code_or_text(content, len(content), sub_limits, raw_name)
         else:
-            add_unread(_zip_entry_region("unsupported_format", index, f"entry signature {signature or 'none'} does not match extension {ext}"))
+            add_unread(_zip_entry_region("parse_error", index, f"entry signature {signature or 'none'} does not match extension {ext}"))
             continue
         if sub["format"] == "pdf" and type(sub["pages"]) is int and sub["pages"] <= pages_left:
             pages_left -= sub["pages"]
@@ -752,7 +788,7 @@ def _parse_zip(data, size, limits, soft_deadline):
                 shifted = dict(loc)
                 shifted["char_start"] = loc["char_start"] + total_chars
                 shifted["char_end"] = loc["char_end"] + total_chars
-                shifted["label"] = f"entry:{index}"
+                shifted["label"] = f"entry:{index} " + str(loc.get("label") or "")
                 locations.append(shifted)
             parts.append(text)
             total_chars += len(text)
@@ -844,9 +880,17 @@ def _ooxml_resolve(base_dir, target):
     if any(ch in target for ch in "\\:%?#") or any(ord(ch) < 32 for ch in target):
         return None
     path = target[1:] if target.startswith("/") else base_dir + target
-    if any(segment in ("", ".", "..") for segment in path.split("/")):
-        return None
-    return path
+    parts = []
+    for segment in path.split("/"):
+        if not segment:
+            return None
+        if segment == "..":
+            if not parts:
+                return None
+            parts.pop()
+        elif segment != ".":
+            parts.append(segment)
+    return "/".join(parts) or None
 
 
 def _ooxml_content_type(types_root, part):
@@ -863,6 +907,40 @@ def _ooxml_content_type(types_root, part):
 def _ooxml_relationships(root):
     return [((c.get("Type") or ""), (c.get("Target") or ""), (c.get("TargetMode") or "Internal"))
             for c in root if c.tag == NS_REL + "Relationship"]
+
+
+def _ooxml_relationship_problems(name, root, present):
+    if root.tag != NS_REL + "Relationships":
+        return ["invalid relationships root"]
+    if name == "_rels/.rels":
+        base = ""
+    elif name.startswith("_rels/"):
+        base = ""
+        if name[6:-5] not in present:
+            return ["relationship source part missing"]
+    elif "/_rels/" in name:
+        folder, filename = name.rsplit("/_rels/", 1)
+        base = folder + "/"
+        if base + filename[:-5] not in present:
+            return ["relationship source part missing"]
+    else:
+        return ["invalid relationship part location"]
+    problems, ids = [], set()
+    for rel in root:
+        rid = rel.get("Id")
+        if rel.tag != NS_REL + "Relationship" or not rid or rid in ids or not rel.get("Type"):
+            problems.append("invalid or duplicate relationship")
+        ids.add(rid)
+        mode = rel.get("TargetMode", "Internal")
+        if mode == "Internal":
+            target = _ooxml_resolve(base, rel.get("Target"))
+            if target is None or target not in present:
+                problems.append("internal relationship target missing or unsafe")
+        elif mode != "External" or not rel.get("Target"):
+            problems.append("invalid relationship target mode or empty target")
+        if len(problems) >= ZIP_MAX_UNREAD:
+            break
+    return problems
 
 
 DOCX_SKIP_TAGS = frozenset(NS_W + t for t in ("del", "delText", "instrText", "moveFrom", "rPr", "pPr", "fldChar"))
@@ -1060,16 +1138,16 @@ def _parse_docx(data, size, limits, soft_deadline):
         record, safe, raw_name = _zip_new_record(index, info, problems)
         entries.append(record)
         if not safe:
-            _docx_region(ctx, "other", f"entry {index}: unsafe name or type: " + "; ".join(record["unsafe_reasons"]))
+            _docx_region(ctx, "parse_error", f"entry {index}: unsafe name or type: " + "; ".join(record["unsafe_reasons"]))
             continue
-        present.add(raw_name)
         if record["is_dir"]:
             problem = _zip_check_directory(zf, info, record, state)
             if problem is not None:
                 _docx_region(ctx, problem[0], f"entry {index}: {problem[1]}")
             continue
+        present.add(raw_name)
         if (info.external_attr >> 16) & 0o170000 == 0o040000 or info.external_attr & 0x10:
-            _docx_region(ctx, "other", f"entry {index}: file entry marked as directory in attributes")
+            _docx_region(ctx, "parse_error", f"entry {index}: file entry marked as directory in attributes")
         if record["encrypted"]:
             _docx_region(ctx, "encrypted", f"entry {index}: encrypted entry; content not read")
             continue
@@ -1088,6 +1166,14 @@ def _parse_docx(data, size, limits, soft_deadline):
             collected += len(read["collected"])
         elif wants_xml:
             _docx_region(ctx, "budget_limit", f"entry {index}: XML part over its parser budget; not inspected")
+
+    for name, raw in xml_parts.items():
+        root, problem = _safe_xml_root(raw, soft_deadline)
+        if problem:
+            _docx_region(ctx, "parse_error", f"{name}: {problem}")
+        elif name.endswith(".rels"):
+            for problem in _ooxml_relationship_problems(name, root, present):
+                _docx_region(ctx, "parse_error", f"{name}: {problem}")
 
     def finish(status, reason, kind=None):
         if reason is not None and kind is not None:
@@ -1168,6 +1254,200 @@ def _parse_docx(data, size, limits, soft_deadline):
 # ---------------------------------------------------------------------------
 # Worker process boundary
 # ---------------------------------------------------------------------------
+
+def _parse_office(data, size, limits, deadline, fmt):
+    zf, infos, problems, error = _zip_open(data, size, limits, fmt)
+    if error is not None:
+        return error
+    result = _result(fmt, "complete", None, size)
+    state = {"budget": limits["max_uncompressed_bytes"], "used": 0, "deadline": deadline}
+    xml_parts, used, parts, chars = {}, 0, [], 0
+    present = set()
+    unread = result["unread_regions"]
+
+    def issue(kind, detail, label=None):
+        if len(unread) < ZIP_MAX_UNREAD:
+            unread.append({"kind": kind, "location": {"label": label} if label else None,
+                           "detail": str(detail)[:MAX_REASON_CHARS]})
+
+    def emit(text, label):
+        nonlocal chars
+        if not text:
+            return
+        text = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
+        if chars + len(text) + 1 > limits["max_text_chars"] or len(result["locations"]) >= MAX_RESULT_ITEMS:
+            issue("budget_limit", "shared text or location budget exhausted", label)
+            return
+        start = chars
+        parts.append(text + "\n")
+        chars += len(text) + 1
+        result["locations"].append({"char_start": start, "char_end": chars - 1, "label": label[:256]})
+
+    for index, info in enumerate(infos):
+        record, safe, name = _zip_new_record(index, info, problems)
+        result["archive_entries"].append(record)
+        if not safe:
+            issue("parse_error", f"unsafe package entry {index}")
+            continue
+        if record["is_dir"]:
+            problem = _zip_check_directory(zf, info, record, state)
+            if problem:
+                issue(problem[0], problem[1])
+            continue
+        if (info.external_attr >> 16) & 0o170000 == 0o040000 or info.external_attr & 0x10:
+            issue("parse_error", f"package entry {index} has directory attributes")
+            continue
+        present.add(name)
+        if record["encrypted"]:
+            issue("encrypted", f"encrypted package entry {index}")
+            continue
+        wants_xml = name.endswith((".xml", ".rels"))
+        cap = max(0, min(DOCX_MAX_PART_BYTES, DOCX_MAX_COLLECT_BYTES - used)) if wants_xml else 0
+        read = _zip_read_entry(zf, info, state, cap)
+        record.update(bytes_read=read["bytes_read"], crc_ok=read["crc_ok"], sha256=read["sha256"])
+        if read["problem"]:
+            issue(read["problem"][0], read["problem"][1], name)
+        elif wants_xml:
+            if read["collected"] is None:
+                issue("budget_limit", "XML part exceeds collection budget", name)
+            else:
+                xml_parts[name] = read["collected"]
+                used += len(read["collected"])
+        elif "/media/" in name:
+            issue("image", "embedded image pixels not inspected", name)
+        else:
+            issue("embedded_object", "non-XML package content not interpreted", name)
+    zf.close()
+    result["metrics"].update(entries=len(infos), uncompressed_bytes_read=state["used"])
+    roots = {}
+
+    def xml(name, required=True):
+        if name in roots:
+            return roots[name]
+        raw = xml_parts.get(name)
+        if raw is None:
+            if required:
+                issue("parse_error", "required XML part missing or unread", name)
+            return None
+        root, problem = _safe_xml_root(raw, deadline)
+        if problem:
+            issue("parse_error", problem, name)
+        roots[name] = root
+        return root
+
+    def relationships(part):
+        base = part.rsplit("/", 1)[0] + "/" if "/" in part else ""
+        name = base + "_rels/" + part.rsplit("/", 1)[-1] + ".rels" if part else "_rels/.rels"
+        root = xml(name, required=not part)
+        found = {}
+        if root is not None:
+            if root.tag != NS_REL + "Relationships":
+                issue("parse_error", "invalid relationships root", name)
+                return found
+            for rel in root:
+                rid = rel.get("Id")
+                if not rid or rid in found:
+                    issue("parse_error", "missing or duplicate relationship ID", name)
+                    continue
+                typ = rel.get("Type", "").rsplit("/", 1)[-1]
+                mode = rel.get("TargetMode", "Internal")
+                target = _ooxml_resolve(base, rel.get("Target")) if mode == "Internal" else None
+                found[rid] = (typ, target)
+                if mode != "Internal" and typ != "hyperlink":
+                    issue("embedded_object", "external content not fetched", name)
+        return found
+
+    for part_name in xml_parts:
+        part_root = xml(part_name)
+        if part_root is not None and part_name.endswith(".rels"):
+            for problem in _ooxml_relationship_problems(part_name, part_root, present):
+                issue("parse_error", problem, part_name)
+    types = xml("[Content_Types].xml")
+    mains = [target for typ, target in relationships("").values() if typ == "officeDocument"]
+    main = mains[0] if len(mains) == 1 else None
+    expected = "application/vnd.openxmlformats-officedocument." + (
+        "presentationml.presentation" if fmt == "pptx" else "spreadsheetml.sheet") + ".main+xml"
+    if types is None or types.tag != NS_CT + "Types" or not main or _ooxml_content_type(types, main) != expected:
+        issue("parse_error", "package main part or content type does not match " + fmt)
+    else:
+        root = xml(main)
+        rels = relationships(main)
+        for related_type, _ in rels.values():
+            if related_type in {"slideMaster", "notesMaster", "externalLink"}:
+                issue("embedded_object", related_type + " content not interpreted", main)
+        ns = "{http://schemas.openxmlformats.org/" + ("presentationml" if fmt == "pptx" else "spreadsheetml") + "/2006/main}"
+        rns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+        expected_root = ns + ("presentation" if fmt == "pptx" else "workbook")
+        if root is not None and root.tag != expected_root:
+            issue("parse_error", "invalid main document root", main)
+            root = None
+        children = [] if root is None else root.findall(".//" + ns + ("sldId" if fmt == "pptx" else "sheet"))
+        shared = []
+        if fmt == "xlsx":
+            for typ, target in rels.values():
+                if typ == "sharedStrings" and target:
+                    sr = xml(target)
+                    if sr is not None:
+                        shared = ["".join(t.text or "" for t in si.iter(ns + "t")) for si in sr.findall(ns + "si")]
+        for number, child in enumerate(children, 1):
+            if time.monotonic() > deadline:
+                issue("budget_limit", "time budget reached")
+                break
+            typ, target = rels.get(child.get(rns + "id"), (None, None))
+            wanted = "slide" if fmt == "pptx" else "worksheet"
+            if typ != wanted or not target:
+                issue("parse_error", "missing or unsafe " + wanted + " relationship")
+                continue
+            doc = xml(target)
+            if doc is None:
+                continue
+            expected_tag = ns + ("sld" if fmt == "pptx" else "worksheet")
+            if doc.tag != expected_tag:
+                issue("parse_error", "invalid " + wanted + " root", target)
+                continue
+            related = relationships(target)
+            for related_type, _ in related.values():
+                if related_type not in {"hyperlink", "image"}:
+                    issue("embedded_object", related_type + " content not interpreted", target)
+            if fmt == "pptx":
+                ans = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+                for paragraph, node in enumerate(doc.iter(ans + "p"), 1):
+                    emit("".join(t.text or "" for t in node.iter(ans + "t")), f"slide:{number} paragraph:{paragraph}")
+                if doc.find(".//" + ns + "graphicFrame") is not None:
+                    issue("embedded_object", "graphic frame layout or chart not rendered", f"slide:{number}")
+            else:
+                sheet = child.get("name", str(number))[:100]
+                for cell in doc.iter(ns + "c"):
+                    label = f"sheet:{sheet} cell:{cell.get('r', '?')}"
+                    value = cell.findtext(ns + "v", "")
+                    cell_type = cell.get("t")
+                    if cell_type == "inlineStr":
+                        value = "".join(t.text or "" for t in cell.iter(ns + "t"))
+                    elif cell_type == "s":
+                        if value.isdigit() and int(value) < len(shared):
+                            value = shared[int(value)]
+                        else:
+                            issue("parse_error", "shared-string index missing or invalid", label)
+                            value = ""
+                    formula = cell.find(ns + "f")
+                    if formula is not None:
+                        value = f"formula: {formula.text or ''}; cached value: {value}"
+                        issue("other", "formula read; cached result not recalculated", label)
+                    if cell_type == "e":
+                        issue("other", "spreadsheet error value: " + value, label)
+                    emit(value, label)
+                if child.get("state", "visible") != "visible":
+                    issue("other", "hidden sheet included in text extraction", f"sheet:{sheet}")
+        if fmt == "pptx":
+            result["pages"] = len(children) if not any(r["kind"] == "parse_error" for r in unread) else None
+    result["text"] = "".join(parts)
+    if unread:
+        result["status"] = "failed" if any(r["kind"] == "parse_error" for r in unread) else "incomplete"
+        result["reason"] = f"{len(unread)} unread or unverified region(s)"
+    else:
+        result["metrics"].update(_text_metrics(result["text"]))
+    return result
+
 
 class _BoundedSink(io.TextIOBase):
     """Swallows worker stdout/stderr, keeping at most a small prefix."""

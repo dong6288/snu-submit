@@ -62,7 +62,7 @@
     "kind": {"enum": ["exists", "count", "filename", "extension", "format", "size_bytes", "pages", "text_chars", "text_words", "content", "deadline"]},
     "operator": {"enum": ["eq", "lt", "lte", "gt", "gte", "exists", "contains"]},
     "unit": {"enum": ["bytes", "KiB", "MiB", "MB_unspecified", "pages", "files", "characters", "characters_no_whitespace", "whitespace_words", null]},
-    "detected_format": {"enum": ["pdf", "docx", "zip", "text", "hwp", "hwpx", "png", "jpeg", "empty", "unknown", "missing"]},
+    "detected_format": {"enum": ["pdf", "docx", "pptx", "xlsx", "zip", "text", "hwp", "hwpx", "png", "jpeg", "empty", "unknown", "missing"]},
     "unknown_code": {"enum": ["source_missing", "source_hash_mismatch", "quote_span_mismatch", "collection_incomplete", "freshness_unknown", "source_changed", "conflict_unresolved", "applicability_unknown", "date_unresolved", "selection_unresolved", "target_ambiguous", "parser_failed", "parser_timeout", "budget_exceeded", "encrypted", "unsupported_format", "unread_region", "file_changed", "outside_root_or_link", "unsafe_archive_entry", "nested_archive", "unsupported_check", "ambiguous_unit", "requires_user_confirmation", "empty_requirements", "no_mandatory_requirements", "window_unknown", "other"]},
     "span": {
       "type": "object", "additionalProperties": false, "required": ["start", "end"],
@@ -148,7 +148,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["name", "status", "metrics", "unread_regions", "limits_hit", "errors"],
       "properties": {
-        "name": {"enum": ["pdf", "docx", "zip", "text", "none"]},
+        "name": {"enum": ["pdf", "docx", "pptx", "xlsx", "zip", "text", "none"]},
         "status": {"enum": ["ok", "partial", "failed", "timeout", "budget_exceeded", "unsupported", "encrypted", "not_run"]},
         "metrics": {
           "type": "object", "additionalProperties": false,

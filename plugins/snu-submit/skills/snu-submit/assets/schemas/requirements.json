@@ -203,7 +203,7 @@
         {"if": {"properties": {"kind": {"const": "extension"}}},
          "then": {"properties": {"operator": {"const": "eq"}, "value": {"enum": [".pdf", ".docx", ".zip", ".txt", ".md", ".hwp", ".hwpx", ".py", ".ipynb", ".c", ".cpp", ".h", ".java", ".js", ".csv", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"]}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
         {"if": {"properties": {"kind": {"const": "format"}}},
-         "then": {"properties": {"operator": {"const": "eq"}, "value": {"enum": ["pdf", "docx", "zip", "text", "hwp", "hwpx", "png", "jpeg"], "description": "Detected by signature. hwp/hwpx contents are not parsed in this alpha."}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
+         "then": {"properties": {"operator": {"const": "eq"}, "value": {"enum": ["pdf", "docx", "pptx", "xlsx", "zip", "text", "hwp", "hwpx", "png", "jpeg"], "description": "Detected by signature and parser. hwp/hwpx contents are not parsed in this alpha."}, "unit": {"const": null}, "target_scope": {"enum": ["file", "archive_entry"]}}}},
         {"if": {"properties": {"kind": {"const": "size_bytes"}}},
          "then": {"properties": {"operator": {"enum": ["eq", "lt", "lte", "gt", "gte"]}, "value": {"type": "number", "minimum": 0, "maximum": 1000000000000}, "unit": {"enum": ["bytes", "KiB", "MiB", "MB_unspecified"]}},
            "if": {"properties": {"unit": {"const": "bytes"}}}, "then": {"properties": {"value": {"type": "integer"}}}}},
