@@ -40,7 +40,7 @@ SNU Submit: eTL 로그인을 확인했고, 문서 제목과 과제 목록으로 
 
 ## 설치 (Windows, Codex)
 
-공개 소스 ZIP을 계속 둘 폴더에 풀고 그 폴더에서 PowerShell로 `.\Install-SnuSubmit.ps1`을 실행합니다. 준비물은 Codex(데스크톱 앱 또는 CLI, 로그인됨)와 python.org의 Python 3.11/3.12입니다. 스크립트는 그 폴더에 `.venv`를 만들어 해시 고정 의존성을 설치하고, `doctor`를 실행하고, 스킬이 쓸 Python 경로를 `runtime.json`에 적은 뒤 로컬 마켓플레이스와 플러그인을 Codex에 등록합니다. 끝나면 Codex 앱을 완전히 껐다 켜고 **새 채팅**에서 `$snu-submit`을 부릅니다. 자세한 내용은 [docs/INSTALL.md](docs/INSTALL.md).
+[릴리스 페이지](https://github.com/dong6288/snu-submit/releases/tag/v0.1.0-alpha.3)에서 `snu-submit-0.1.0-alpha.3.zip`을 받아([바로 받기](https://github.com/dong6288/snu-submit/releases/download/v0.1.0-alpha.3/snu-submit-0.1.0-alpha.3.zip)) 계속 둘 폴더에 풀고, 그 폴더에서 PowerShell로 `.\Install-SnuSubmit.ps1`을 실행합니다. 준비물은 Codex(데스크톱 앱 또는 CLI, 로그인됨)와 python.org의 Python 3.11/3.12입니다. 스크립트는 그 폴더에 `.venv`를 만들어 해시 고정 의존성을 설치하고, `doctor`를 실행하고, 스킬이 쓸 Python 경로를 `runtime.json`에 적은 뒤 로컬 마켓플레이스와 플러그인을 Codex에 등록합니다. 끝나면 Codex 앱을 완전히 껐다 켜고 **새 채팅**에서 `$snu-submit`을 부릅니다. 자세한 내용은 [docs/INSTALL.md](docs/INSTALL.md).
 
 ## 사용
 

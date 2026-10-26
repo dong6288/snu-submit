@@ -11,7 +11,7 @@ Windows에서 공개 소스 ZIP으로 SNU Submit 플러그인을 Codex에 설치
 
 ## 설치 (한 번)
 
-1. ZIP을 **계속 둘 폴더**에 풉니다(예: `%USERPROFILE%\Apps\snu-submit-0.1.0-alpha.3`). 설치 후 이 폴더를 지우거나 옮기지 마세요. Codex가 이 폴더를 로컬 마켓플레이스로 쓰고, 스킬이 이 폴더의 `.venv` Python을 씁니다.
+1. [릴리스 페이지](https://github.com/dong6288/snu-submit/releases/tag/v0.1.0-alpha.3)에서 `snu-submit-0.1.0-alpha.3.zip`을 받아([바로 받기](https://github.com/dong6288/snu-submit/releases/download/v0.1.0-alpha.3/snu-submit-0.1.0-alpha.3.zip)) **계속 둘 폴더**에 풉니다(예: `%USERPROFILE%\Apps\snu-submit-0.1.0-alpha.3`). 받은 파일이 맞는지는 릴리스 안내의 SHA-256과 `Get-FileHash`로 비교할 수 있습니다. 설치 후 이 폴더를 지우거나 옮기지 마세요. Codex가 이 폴더를 로컬 마켓플레이스로 쓰고, 스킬이 이 폴더의 `.venv` Python을 씁니다.
 2. 그 폴더에서 PowerShell을 열고 실행합니다.
 
    ```powershell
